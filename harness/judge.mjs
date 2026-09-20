@@ -7,6 +7,7 @@
 // Usage: node harness/judge.mjs [--label L] [--kinds plan,code] [--force]
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { loadConfig, listTasks, modelSlug, ROOT } from "./lib/config.mjs";
 import { completeJson } from "./lib/llm.mjs";
@@ -43,6 +44,9 @@ mkdirSync(outDir, { recursive: true });
 const jobs = [];
 for (const [key, pair] of pairs) {
 	if (!pair.plan || !pair.readyset) continue;
+	// A harness error is the benchmark's fault, not the workflow's: exclude from judging (it still
+	// counts as 0 in the report's intent-to-treat hidden-test figure).
+	if ([pair.plan, pair.readyset].some((r) => readJson(join(r.dir, "compiled.json"))?.status === "harness-error")) continue;
 	const [taskDir, slug, rep] = key.split("|");
 	for (const kind of kinds) {
 		for (const judge of cfg.judge.models) {
@@ -62,11 +66,22 @@ console.log(`judged ${done}/${jobs.length} → results/${label}/judgments/`);
 
 async function judgeOne({ taskDir, slug, rep, kind, judge, order, pair }) {
 	const file = join(outDir, taskDir, `${slug}__r${rep}__${kind}__${modelSlug(judge)}__${order}.json`);
-	if (existsSync(file) && !argv.force) {
-		done++;
-		return;
-	}
 	const task = tasks[taskDir];
+	const docHash = createHash("sha256")
+		.update(readText(join(pair.plan.dir, "judge", kind === "plan" ? "plan.md" : "code.diff")))
+		.update("\0")
+		.update(readText(join(pair.readyset.dir, "judge", kind === "plan" ? "plan.md" : "code.diff")))
+		.digest("hex")
+		.slice(0, 16);
+	if (existsSync(file) && !argv.force) {
+		const prev = readJson(file);
+		// Reuse a verdict only if it succeeded and was made on exactly these documents. A recompile
+		// that changes a document (e.g. planning doc recovered from final/) re-judges that pair.
+		if (prev && !prev.error && (!prev.docHash || prev.docHash === docHash)) {
+			done++;
+			return;
+		}
+	}
 	const docOf = (run) => {
 		const text = readText(join(run.dir, "judge", kind === "plan" ? "plan.md" : "code.diff"));
 		if (!text.trim()) return "(empty — nothing was produced)";
@@ -79,7 +94,7 @@ async function judgeOne({ taskDir, slug, rep, kind, judge, order, pair }) {
 		.replace("{{REPO}}", () => repoSnapshot(task))
 		.replace("{{A}}", () => docOf(first))
 		.replace("{{B}}", () => docOf(second));
-	const record = { task: task.id, taskDir, modelSlug: slug, rep: Number(rep), kind, judge, order, positions: { A: first.arm, B: second.arm } };
+	const record = { task: task.id, taskDir, modelSlug: slug, rep: Number(rep), kind, judge, order, docHash, positions: { A: first.arm, B: second.arm } };
 	try {
 		const { json, raw } = await completeJson({ backend: cfg.judge.backend, model: judge, prompt, timeoutSeconds: cfg.judge.timeoutSeconds ?? 600, cfg });
 		record.verdict = json;

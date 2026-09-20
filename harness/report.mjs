@@ -14,16 +14,24 @@ const base = join(RESULTS, label);
 const taskMeta = Object.fromEntries(listTasks().map((t) => [t.id, t]));
 const manifest = readJson(join(base, "run-manifest.json"), {});
 
-const runs = listRunDirs(label)
+const allRuns = listRunDirs(label)
 	.map((r) => readJson(join(r.dir, "compiled.json")))
 	.filter(Boolean);
-if (runs.length === 0) {
+// Harness errors are the benchmark's fault: excluded from the main (paired) comparison, but counted
+// as 0 in the intent-to-treat figure and listed under Run health — never silently dropped.
+const runs = allRuns.filter((r) => r.status !== "harness-error");
+if (allRuns.length === 0) {
 	console.error(`no compiled runs under results/${label} — run ./compile.sh first`);
 	process.exit(1);
 }
 const ARMS = ["plan", "readyset"];
-const byArm = (arm) => runs.filter((r) => r.arm === arm);
-const taskIds = [...new Set(runs.map((r) => r.task))].sort();
+const allTaskIds = [...new Set(allRuns.map((r) => r.task))].sort();
+// The comparison set: tasks where BOTH arms have at least one valid run. Every mean below is taken
+// over this same set, so the two arms never have different denominators.
+const taskIds = allTaskIds.filter((t) => ARMS.every((a) => runs.some((r) => r.task === t && r.arm === a)));
+const excludedTasks = allTaskIds.filter((t) => !taskIds.includes(t));
+const common = runs.filter((r) => taskIds.includes(r.task));
+const byArm = (arm) => common.filter((r) => r.arm === arm);
 
 // ---------------------------------------------------------------- objective metrics ----------
 const METRICS = [
@@ -43,6 +51,9 @@ const METRICS = [
 	["tokensPrep", "Tokens — prep", kfmt],
 	["tokensExec", "Tokens — exec", kfmt],
 	["tokensTotal", "Tokens — total", kfmt],
+	["tokensInput", "  of which fresh input", kfmt],
+	["tokensCacheRead", "  of which cache read", kfmt],
+	["tokensOutput", "  of which output", kfmt],
 	["cost", "Cost (as reported by omp)", money],
 ];
 const value = (r, key) => {
@@ -68,7 +79,7 @@ const value = (r, key) => {
 };
 
 /** Per task: mean(readyset) − mean(plan) over all models × reps. */
-function pairedByTask(key, rows = runs) {
+function pairedByTask(key, rows = common) {
 	return taskIds
 		.map((t) => {
 			const p = mean(rows.filter((r) => r.task === t && r.arm === "plan").map((r) => value(r, key)));
@@ -77,6 +88,27 @@ function pairedByTask(key, rows = runs) {
 		})
 		.filter(Boolean);
 }
+
+/**
+ * Intent-to-treat hidden-test rate over EVERY task that was attempted: a harness error or a missing
+ * arm counts as 0. Shown next to the completed-only figure so neither can be quoted without the other.
+ */
+const itt = (() => {
+	const rate = (t, a) => {
+		const rows = allRuns.filter((r) => r.task === t && r.arm === a);
+		return rows.length ? mean(rows.map((r) => (r.status === "harness-error" ? 0 : r.hiddenPassRate))) : 0;
+	};
+	const paired = allTaskIds.map((t) => ({ task: t, plan: rate(t, "plan"), readyset: rate(t, "readyset") }));
+	paired.forEach((p) => (p.delta = p.readyset - p.plan));
+	return {
+		n: paired.length,
+		plan: mean(paired.map((p) => p.plan)),
+		readyset: mean(paired.map((p) => p.readyset)),
+		delta: mean(paired.map((p) => p.delta)),
+		ci: bootstrapCI(paired.map((p) => [p.delta]), (xs) => mean(xs)),
+		sign: signTest(paired.map((p) => p.delta)),
+	};
+})();
 
 const objective = METRICS.map(([key, name, fmt]) => {
 	const planV = mean(byArm("plan").map((r) => value(r, key)));
@@ -160,9 +192,9 @@ for (const kind of ["plan", "code"]) {
 
 // ---------------------------------------------------------------- breakdowns -----------------
 function breakdown(field) {
-	const groups = [...new Set(runs.map((r) => r[field]))].sort();
+	const groups = [...new Set(common.map((r) => r[field]))].sort();
 	return groups.map((g) => {
-		const rows = runs.filter((r) => r[field] === g);
+		const rows = common.filter((r) => r[field] === g);
 		const hidden = pairedByTask("hiddenPassRate", rows);
 		const planOverall = judged.plan ? winRate(judged.plan.items.filter((i) => taskMeta[i.task]?.[field] === g), "overall") : null;
 		const codeOverall = judged.code ? winRate(judged.code.items.filter((i) => taskMeta[i.task]?.[field] === g), "overall") : null;
@@ -187,24 +219,30 @@ const perTask = taskIds.map((t) => {
 	return { task: t, title: taskMeta[t]?.title, clarity: taskMeta[t]?.clarity, ...h, planJudge: pj, codeJudge: cj };
 });
 
-const statusCounts = Object.fromEntries(ARMS.map((a) => [a, countBy(byArm(a).map((r) => r.status))]));
+const statusCounts = Object.fromEntries(ARMS.map((a) => [a, countBy(allRuns.filter((r) => r.arm === a).map((r) => r.status))]));
+const harnessErrors = allRuns.filter((r) => r.status === "harness-error");
+const bypassed = allRuns.filter((r) => r.gateBypass?.length);
 const drift = runs.filter((r) => r.modelDrift);
-const models = [...new Set(runs.map((r) => r.model))];
-const reps = Math.max(...runs.map((r) => r.rep));
+const models = [...new Set(runs.map((r) => r.model).filter(Boolean))];
+const reps = Math.max(...allRuns.map((r) => r.rep ?? 1));
 
 // ---------------------------------------------------------------- write ----------------------
 const hiddenRow = objective.find((o) => o.key === "hiddenPassRate");
 const md = [];
 md.push(`# /plan vs /readyset — benchmark report (${label})`);
 md.push("");
-md.push(`Tasks: **${taskIds.length}** · models: **${models.join(", ")}** · reps per cell: **${reps}** · runs compiled: **${runs.length}**`);
+md.push(`Tasks attempted: **${allTaskIds.length}** · compared (both arms have a valid run): **${taskIds.length}**${excludedTasks.length ? ` — excluded: ${excludedTasks.join(", ")}` : ""} · models: **${models.join(", ")}** · reps per cell: **${reps}** · runs: **${allRuns.length}** (${harnessErrors.length} harness error${harnessErrors.length === 1 ? "" : "s"})`);
 if (manifest.omp) md.push(`omp ${manifest.omp.version ?? "?"} · readyset-flow ${manifest.readyset?.version ?? "?"} @ ${manifest.readyset?.gitSha ?? "?"} · run started ${manifest.startedAt ?? "?"}`);
 md.push("");
 md.push("## Headline");
 md.push("");
 md.push(
-	`- **Hidden tests passed:** /plan ${pct(hiddenRow.plan)} vs /readyset ${pct(hiddenRow.readyset)} — paired Δ ${signed(hiddenRow.delta, pct)} (95% CI ${ci(hiddenRow.ci, pct)}; sign test over tasks ${hiddenRow.sign.pos}↑ ${hiddenRow.sign.neg}↓, p=${hiddenRow.sign.p.toFixed(3)})`,
+	`- **Hidden tests passed (${taskIds.length} compared tasks):** /plan ${pct(hiddenRow.plan)} vs /readyset ${pct(hiddenRow.readyset)} — paired Δ ${signed(hiddenRow.delta, pct)} (95% CI ${ci(hiddenRow.ci, pct)}; sign test ${hiddenRow.sign.pos}↑ ${hiddenRow.sign.neg}↓ ${taskIds.length - hiddenRow.sign.n} tied, p=${hiddenRow.sign.p.toFixed(3)})`,
 );
+md.push(
+	`- **Intent-to-treat, worst case (all ${itt.n} attempted tasks; every failed run and every harness error scored 0 — harness errors are the benchmark's fault, so this is a lower bound, not a finding about either workflow):** /plan ${pct(itt.plan)} vs /readyset ${pct(itt.readyset)} — Δ ${signed(itt.delta, pct)} (95% CI ${ci(itt.ci, pct)}; p=${itt.sign.p.toFixed(3)})`,
+);
+if (bypassed.length) md.push(`- **⚠ Review gate bypassed** (code changed with no approval) in ${bypassed.length} run(s): ${bypassed.map((r) => `${r.task}/${r.arm}/r${r.rep}`).join(", ")}. Their hidden-test scores are included above but the runs violate readyset's own "no execution without approval" guarantee.`);
 for (const kind of ["plan", "code"]) {
 	if (!judged[kind]) continue;
 	const o = judged[kind].dims.overall;
@@ -218,7 +256,7 @@ md.push(`- **Cost:** tokens ${kfmt(tokens.plan)} vs ${kfmt(tokens.readyset)} per
 md.push("");
 md.push("Win rate = (wins + ½ ties) / comparisons, from /readyset's side; 50% = no difference. A judge verdict only counts as a win when it holds with A/B positions swapped.");
 md.push("");
-md.push("## Objective metrics (mean per run; Δ = /readyset − /plan, paired by task)");
+md.push(`## Objective metrics (mean per run over the ${taskIds.length} compared tasks; Δ = /readyset − /plan, paired by task)`);
 md.push("");
 md.push("| Metric | /plan | /readyset | Δ | 95% CI (task bootstrap) |");
 md.push("| --- | ---: | ---: | ---: | --- |");
@@ -237,6 +275,38 @@ for (const kind of ["plan", "code"]) {
 	for (const [j, v] of Object.entries(judged[kind].perJudge)) md.push(`| ${j} | ${pct(v.overall.rate)} (${v.overall.w}/${v.overall.t}/${v.overall.l}) | ${pct(v.positionConsistency)} |`);
 	md.push("");
 	md.push(`Inter-judge agreement on overall verdict: ${pct(judged[kind].interJudgeAgreement)}`);
+	md.push("");
+}
+if (judged.plan) {
+	// Verbosity check: LLM judges tend to reward longer documents, and A/B swapping does not control
+	// for that. Show each task's length ratio next to its planning verdict so the pattern is visible.
+	md.push("## Verbosity check (planning judge vs document length)");
+	md.push("");
+	md.push("A/B swapping controls position bias, not length bias. If /readyset wins mostly where its document is much longer, the planning win rate is partly a length effect.");
+	md.push("");
+	md.push("| Task | /plan chars | /readyset chars | ratio | readyset source | planning verdict (W/T/L) |");
+	md.push("| --- | ---: | ---: | ---: | --- | --- |");
+	const lenRows = [];
+	for (const t of taskIds) {
+		const p = mean(byArm("plan").filter((r) => r.task === t).map((r) => r.planChars));
+		const s2 = mean(byArm("readyset").filter((r) => r.task === t).map((r) => r.planChars));
+		const src = byArm("readyset").find((r) => r.task === t)?.planSource ?? "?";
+		const w = winRate(judged.plan.items.filter((i) => i.task === t), "overall");
+		const ratio = p ? s2 / p : null;
+		lenRows.push({ ratio, w });
+		md.push(`| ${t} | ${num0(p)} | ${num0(s2)} | ${ratio == null ? "—" : `${ratio.toFixed(1)}×`} | ${src} | ${w.w}/${w.t}/${w.l} |`);
+	}
+	const bucket = (pred) => {
+		const rows = lenRows.filter((r) => r.ratio != null && pred(r.ratio));
+		const w = rows.reduce((a, r) => a + r.w.w, 0);
+		const t2 = rows.reduce((a, r) => a + r.w.t, 0);
+		const n = rows.reduce((a, r) => a + r.w.n, 0);
+		return { tasks: rows.length, rate: n ? (w + 0.5 * t2) / n : null };
+	};
+	const short = bucket((r) => r <= 2);
+	const long = bucket((r) => r > 2);
+	md.push("");
+	md.push(`/readyset planning win rate where its document is ≤2× longer: ${pct(short.rate)} (${short.tasks} tasks) · >2× longer: ${pct(long.rate)} (${long.tasks} tasks).`);
 	md.push("");
 }
 for (const [field, title] of [["clarity", "By request clarity"], ["category", "By task category"]]) {
@@ -264,14 +334,16 @@ md.push("");
 for (const a of ARMS) md.push(`- ${a}: ${Object.entries(statusCounts[a]).map(([k, v]) => `${k} ${v}`).join(", ") || "—"}`);
 md.push(`- runs where omp routed to a model other than the intended one (fallback): ${drift.length}${drift.length ? ` — ${drift.map((r) => `${r.task}/${r.arm}/r${r.rep}: ${r.modelDrift.join(",")}`).join("; ")}` : ""}`);
 md.push(`- judge calls that failed: ${judgeErrors}`);
-md.push(`- runs with code changed before approval: ${runs.filter((r) => r.codeChangedBeforeApproval?.length).map((r) => `${r.task}/${r.arm}/r${r.rep}`).join(", ") || "none"}`);
+md.push(`- runs with code changed before approval: ${allRuns.filter((r) => r.codeChangedBeforeApproval?.length).map((r) => `${r.task}/${r.arm}/r${r.rep}`).join(", ") || "none"}`);
+md.push(`- review gate bypassed (readyset): ${bypassed.map((r) => `${r.task}/r${r.rep}${r.archivedByAgent ? " (self-archived)" : ""} → ${r.gateBypass.join(", ")}`).join("; ") || "none"}`);
+md.push(`- harness errors (excluded from the comparison, 0 in intent-to-treat): ${harnessErrors.map((r) => `${r.task}/${r.arm}/r${r.rep ?? "?"}: ${r.harnessError}`).join("; ") || "none"}`);
 md.push("");
 md.push("See README.md → Methodology for what each number means and its known limitations.");
 
 writeFileSync(join(base, "report.md"), `${md.join("\n")}\n`);
 writeFileSync(
 	join(base, "summary.json"),
-	`${JSON.stringify({ label, taskCount: taskIds.length, models, reps, objective: objective.map(({ fmt, ...o }) => o), judged: Object.fromEntries(Object.entries(judged).map(([k, v]) => [k, { dims: v.dims, perJudge: v.perJudge, interJudgeAgreement: v.interJudgeAgreement }])), perTask, statusCounts }, null, 2)}\n`,
+	`${JSON.stringify({ label, taskCount: taskIds.length, models, reps, objective: objective.map(({ fmt, ...o }) => o), judged: Object.fromEntries(Object.entries(judged).map(([k, v]) => [k, { dims: v.dims, perJudge: v.perJudge, interJudgeAgreement: v.interJudgeAgreement }])), perTask, statusCounts, comparedTasks: taskIds, excludedTasks, intentToTreat: itt, gateBypassed: bypassed.map((r) => ({ task: r.task, rep: r.rep, files: r.gateBypass })), harnessErrors: harnessErrors.map((r) => ({ task: r.task, arm: r.arm, rep: r.rep, error: r.harnessError })) }, null, 2)}\n`,
 );
 console.log(`report → results/${label}/report.md`);
 

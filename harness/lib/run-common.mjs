@@ -118,3 +118,30 @@ export async function answerAgentUi(rpc, frame, simUser, state) {
 export function nowIso() {
 	return new Date().toISOString();
 }
+
+/** Workflow artefacts, not product code: never counted as "code changed". */
+export const WORKFLOW_PATHS = [/^readyset\//, /^\.ai\//, /^\.omp\//, /^PLAN\.md$/i, /^\.fake-answers$/];
+export const isWorkflowPath = (p) => WORKFLOW_PATHS.some((re) => re.test(p));
+
+/**
+ * captureDiff that never throws. A run whose workspace was damaged (deleted .git, clobbered dir)
+ * still gets a metrics.json — with status "harness-error" — instead of vanishing from the results.
+ */
+export function safeCaptureDiff(ws, baseSha, metrics) {
+	try {
+		return captureDiff(ws, baseSha);
+	} catch (e) {
+		metrics.harnessError = `captureDiff: ${String(e.message ?? e).split("\n")[0].slice(0, 300)}`;
+		metrics.errors.push(metrics.harnessError);
+		return { full: "", stat: "", status: "" };
+	}
+}
+
+/** Product-code paths in a numstat text (tab-separated add/del/path per line). */
+export function codePathsFromNumstat(stat) {
+	return stat
+		.split("\n")
+		.filter(Boolean)
+		.map((l) => l.split("\t")[2])
+		.filter((p) => p && !isWorkflowPath(p));
+}

@@ -17,15 +17,16 @@ import { git, makeWorkspace } from "./lib/workspace.mjs";
 const { values: argv } = parseArgs({ options: { label: { type: "string" }, force: { type: "boolean", default: false } } });
 const label = resolveLabel(argv.label);
 const tasks = Object.fromEntries(listTasks().map((t) => [t.dirName, t]));
-const WORKFLOW_PATHS = [/^readyset\//, /^\.ai\//, /^\.omp\//, /^PLAN\.md$/i, /^\.fake-answers$/];
+import { WORKFLOW_PATHS } from "./lib/run-common.mjs";
 
 const rows = [];
 for (const run of listRunDirs(label)) {
 	const task = tasks[run.taskDir];
-	const metrics = readJson(join(run.dir, "metrics.json"));
-	if (!task || !metrics) {
-		console.log(`skip ${run.taskDir}/${run.cell} (no metrics.json — run incomplete)`);
-		continue;
+	if (!task) continue;
+	let metrics = readJson(join(run.dir, "metrics.json"));
+	if (!metrics) {
+		// Older runs (before run.mjs wrote stub metrics) can lack metrics.json entirely. Count them.
+		metrics = { status: "harness-error", harnessError: "no metrics.json (driver crashed)", errors: [], events: [], model: run.modelSlug };
 	}
 	const compiledFile = join(run.dir, "compiled.json");
 	if (existsSync(compiledFile) && !argv.force) {
@@ -105,7 +106,12 @@ for (const run of listRunDirs(label)) {
 		planModel: metrics.planModel,
 		execModel: metrics.execModel,
 		rep: run.rep,
-		status: metrics.status,
+		// Runs recorded before bypass detection existed carry gate-not-shown / no-proposal; normalise.
+		status: gateBypass(run, metrics, codeFiles) ? "gate-bypassed" : metrics.status,
+		harnessError: metrics.status === "harness-error" ? (metrics.harnessError ?? "unknown") : null,
+		gateBypass: gateBypass(run, metrics, codeFiles),
+		archivedByAgent: Boolean(metrics.archivedByAgent) || (run.arm === "readyset" && !metrics.prepAt && walk(join(run.dir, "final", "readyset", "changes", "archive")).length > 0),
+		planSource: plan.source,
 		planCaptured: plan.chars > 0,
 		planChars: plan.chars,
 		hiddenPass: hidden.pass,
@@ -121,7 +127,7 @@ for (const run of listRunDirs(label)) {
 		linesDeleted: codeFiles.reduce((s, f) => s + f.del, 0),
 		testFilesChanged: codeFiles.filter((f) => isTest(f.path)).length,
 		unexpectedFiles: unexpected.map((f) => f.path),
-		codeChangedBeforeApproval: codeChangedBeforeApproval(metrics.prepWorktreeStatus, isWorkflow),
+		codeChangedBeforeApproval: metrics.prepAt ? codeChangedBeforeApproval(metrics.prepWorktreeStatus, isWorkflow) : (gateBypass(run, metrics, codeFiles) ?? []),
 		grounding,
 		simUserAnswers: metrics.simUserAnswers,
 		nudges: metrics.nudges,
@@ -134,6 +140,9 @@ for (const run of listRunDirs(label)) {
 		tokensPrep: metrics.tokens?.prep?.total ?? null,
 		tokensExec: metrics.tokens?.exec?.total ?? null,
 		tokensTotal: metrics.tokens?.total?.total ?? null,
+		tokensInput: metrics.tokens?.total?.input ?? null,
+		tokensCacheRead: metrics.tokens?.total?.cacheRead ?? null,
+		tokensOutput: metrics.tokens?.total?.output ?? null,
 		cost: metrics.tokens?.total?.cost ?? null,
 		toolCalls: metrics.tokens?.total?.toolCalls ?? null,
 		routedModels: metrics.routedModels,
@@ -161,14 +170,26 @@ console.log(`\ncompiled ${rows.length} run(s) → results/${label}/compiled.csv`
 
 function planningDocument(run, metrics) {
 	const parts = [];
+	let source = run.arm === "plan" ? "plan autosave at approval" : "snapshot at review gate";
 	if (run.arm === "plan") {
 		const dir = join(run.dir, "prep", "plan-autosave");
 		for (const f of walk(dir).filter((f) => f.endsWith(".md"))) parts.push({ heading: "Plan", body: readText(join(dir, f)) });
 	} else {
-		const bdir = join(run.dir, "prep", "brainstorms");
+		const bdir = existsSync(join(run.dir, "prep", "brainstorms")) ? join(run.dir, "prep", "brainstorms") : join(run.dir, "final", "ai", "brainstorms");
 		for (const f of walk(bdir).filter((f) => f.endsWith(".md"))) parts.push({ heading: "Requirements record", body: stripFrontmatter(readText(join(bdir, f))) });
-		const cdir = join(run.dir, "prep", "readyset-change");
-		const files = walk(cdir);
+		let cdir = join(run.dir, "prep", "readyset-change");
+		let files = walk(cdir);
+		if (!files.some((f) => /(^|\/)proposal\.md$/.test(f))) {
+			// Gate never reached (bypass / stalled): judge what the agent actually wrote, from the final
+			// tree — including changes/archive/ when the agent archived the change itself. Marked as such.
+			const fdir = join(run.dir, "final", "readyset", "changes");
+			const fFiles = walk(fdir).filter((f) => /(^|\/)(proposal|design|tasks)\.md$|(^|\/)specs\/.*\.md$/.test(f));
+			if (fFiles.length) {
+				cdir = fdir;
+				files = fFiles;
+				source = "final (gate never reached)";
+			}
+		}
 		const pick = (re, heading) => files.filter((f) => re.test(f)).forEach((f) => parts.push({ heading, body: readText(join(cdir, f)) }));
 		pick(/(^|\/)proposal\.md$/, "Proposal");
 		pick(/(^|\/)design\.md$/, "Design");
@@ -176,7 +197,7 @@ function planningDocument(run, metrics) {
 		pick(/(^|\/)tasks\.md$/, "Task list");
 	}
 	const raw = parts.map((p) => `## ${p.heading}\n\n${p.body.trim()}\n`).join("\n");
-	return { raw, chars: raw.length };
+	return { raw, chars: raw.length, source: raw ? source : "none" };
 }
 
 function stripFrontmatter(text) {
@@ -236,6 +257,9 @@ function bundle(task, c, plan, codeDiff, hidden) {
 | code files changed | ${c.filesChanged} (+${c.linesAdded} −${c.linesDeleted}), test files ${c.testFilesChanged} |
 | unexpected files | ${c.unexpectedFiles.join(", ") || "—"} |
 | code changed before approval | ${c.codeChangedBeforeApproval.join(", ") || "—"} |
+| review gate | ${c.gateBypass ? `**BYPASSED** — code changed with no approval: ${c.gateBypass.join(", ")}${c.archivedByAgent ? " (agent also archived the change itself)" : ""}` : c.arm === "readyset" ? "reached" : "n/a"} |
+| planning doc source | ${c.planSource} |
+| harness error | ${c.harnessError ?? "—"} |
 | plan grounding | ${c.grounding.existing} existing + ${c.grounding.createdByRun} created / ${c.grounding.refs} refs; dangling: ${c.grounding.dangling.join(", ") || "—"} |
 | sim-user answers / nudges | ${c.simUserAnswers} / ${c.nudges} |
 | wall time (prep / exec) | ${fmtMs(c.wallMs)} (${fmtMs(c.prepMs)} / ${fmtMs(c.execMs)}) |
@@ -269,9 +293,17 @@ function fmtMs(ms) {
 }
 
 function writeCsv(file, rows) {
-	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "cost", "planChars"];
+	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
 	const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 	writeFileSync(file, `${cols.join(",")}\n${rows.map((r) => cols.map((c) => esc(r[c])).join(",")).join("\n")}\n`);
 }
 
 void git;
+
+/** Product code changed although the readyset review gate was never reached (null for /plan). */
+function gateBypass(run, metrics, codeFiles) {
+	if (run.arm !== "readyset" || metrics.status === "harness-error") return null;
+	if (metrics.prepAt) return null;
+	const paths = metrics.gateBypass ?? codeFiles.map((f) => f.path);
+	return paths.length ? paths : null;
+}

@@ -4,7 +4,7 @@
 // runs first (time-of-day / provider-load drift is spread across both).
 // Usage: node harness/run.mjs [T01 T04 …] [--label L] [--reps N] [--arms plan,readyset] [--models a,b] [--force]
 import { spawn, spawnSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -42,6 +42,7 @@ for (let rep = 1; rep <= reps; rep++) {
 }
 
 mkdirSync(join(RESULTS, label, "logs"), { recursive: true });
+if (!argv["dry-run"]) acquireLock(join(RESULTS, label, ".lock"));
 setLatest(label);
 const manifestFile = join(RESULTS, label, "run-manifest.json");
 const manifest = readJson(manifestFile, null) ?? {
@@ -99,7 +100,26 @@ async function worker() {
 		log.end();
 		finished++;
 		const { out } = runPaths({ cfg, label, task: c.task, arm: c.arm, model: c.model, rep: c.rep });
-		const m = readJson(join(out, "metrics.json"), { status: `crashed (exit ${code})` });
+		let m = readJson(join(out, "metrics.json"));
+		if (!m) {
+			// The driver died before writing metrics. Record the cell anyway, so it is counted (as a
+			// harness error) instead of silently disappearing from every denominator downstream.
+			m = {
+				arm: c.arm,
+				task: c.task.id,
+				model: c.model,
+				rep: c.rep,
+				status: "harness-error",
+				harnessError: `driver exited ${code} without metrics.json — see logs/${c.task.id}__${cell}.log`,
+				errors: [],
+				events: [],
+				startedAt: new Date(started).toISOString(),
+				finishedAt: new Date().toISOString(),
+				wallMs: Date.now() - started,
+			};
+			mkdirSync(out, { recursive: true });
+			writeFileSync(join(out, "metrics.json"), `${JSON.stringify(m, null, 2)}\n`);
+		}
 		console.log(`[${finished}/${todo.length}] ${c.task.id} ${c.arm.padEnd(8)} ${c.model} r${c.rep} → ${m.status} (${Math.round((Date.now() - started) / 1000)}s)`);
 	}
 }
@@ -116,4 +136,47 @@ function readysetInfo(ext) {
 	const sha = spawnSync("git", ["-C", repo, "rev-parse", "--short", "HEAD"], { encoding: "utf8" }).stdout?.trim();
 	const dirty = spawnSync("git", ["-C", repo, "status", "--porcelain", "--", "src"], { encoding: "utf8" }).stdout?.trim();
 	return { extension: ext, found: true, version: pkg.version, gitSha: sha || null, srcDirty: Boolean(dirty) };
+}
+
+/**
+ * One run process per label. Two processes on the same label share workspaces and delete each
+ * other's repos (seen in deepseek-r1: T03/T06/T07 lost their .git). A lock left by a dead process
+ * (same host, pid gone) is taken over; a live one aborts this run.
+ */
+function acquireLock(file) {
+	if (existsSync(file)) {
+		let holder = {};
+		try {
+			holder = JSON.parse(readFileSync(file, "utf8"));
+		} catch {}
+		let alive = false;
+		if (holder.host === hostname() && holder.pid) {
+			try {
+				process.kill(holder.pid, 0);
+				alive = true;
+			} catch {}
+		} else if (holder.pid) {
+			alive = true; // another host: can't check, don't steal it
+		}
+		if (alive) {
+			console.error(`label ${label} is already being run by pid ${holder.pid} on ${holder.host} since ${holder.at}.`);
+			console.error(`Wait for it, stop it, or delete ${file} if you are sure it is gone.`);
+			process.exit(3);
+		}
+		console.log(`taking over stale lock from pid ${holder.pid}`);
+	}
+	writeFileSync(file, JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() }));
+	const release = () => {
+		try {
+			const cur = JSON.parse(readFileSync(file, "utf8"));
+			if (cur.pid === process.pid) rmSync(file, { force: true });
+		} catch {}
+	};
+	process.on("exit", release);
+	for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+		process.on(sig, () => {
+			release();
+			process.exit(130);
+		});
+	}
 }

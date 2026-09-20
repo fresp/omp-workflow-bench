@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, captureDiff, listMd, nowIso, prepareRun, runPaths, subtractTokens, tokenSummary } from "./lib/run-common.mjs";
+import { answerAgentUi, listMd, safeCaptureDiff, nowIso, prepareRun, runPaths, subtractTokens, tokenSummary } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
 const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" } } });
@@ -147,10 +147,11 @@ try {
 }
 await rpc.close();
 
-const diff = captureDiff(paths.ws, baseSha);
+const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
 
+if (metrics.harnessError) metrics.status = "harness-error";
 metrics.finishedAt = nowIso();
 metrics.simUserAnswers = simUser.answers;
 metrics.planCaptured = listMd(autosaveDir).length > 0;

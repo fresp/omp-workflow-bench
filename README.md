@@ -134,11 +134,17 @@ to `limits.maxNudges`. Nudges are counted and reported.
 - the repo's own suite green
 - code files and lines changed
 - files touched outside the task's expected scope
-- code changed before approval (a planning phase is supposed to be read-only)
+- code changed before approval (a planning phase is supposed to be read-only). For readyset, a run
+  whose review gate was never reached but whose product code changed is marked **`gate-bypassed`**:
+  it still gets a hidden-test score, but it is flagged in the headline because it breaks readyset's
+  "no execution without approval" guarantee
 - **plan grounding**: file paths the plan mentions that neither exist in the repo nor get created
   (dangling)
 - questions answered by the user, and nudges
-- wall time and tokens, both split into prep (start → approval) and exec (approval → end)
+- wall time and tokens, both split into prep (start → approval) and exec (approval → end); tokens
+  are also split into fresh input, cache read and output, because cache reads are much cheaper
+- **grading is rebuilt from `final/changes.diff`** on a fresh copy of the fixture, never from the
+  live workspace (which can be cleaned or clobbered)
 
 **Judged, from `bench.sh`.** Pairwise and blind, run separately on two things:
 - **plan**: the preparation documents, normalized so tool vocabulary like "readyset", change-dir
@@ -150,7 +156,21 @@ model sees every pair twice, with A/B positions swapped. A dimension counts as a
 orders agree; otherwise it's a tie. The report shows position consistency per judge and agreement
 between judges. Judges are told not to reward length or structure. The rubrics are in `rubric/`.
 
+Swapping positions does not control for **length**, and LLM judges tend to favour longer documents.
+The report therefore has a *Verbosity check* table: each task's planning-document length ratio next
+to its planning verdict. Read the planning win rate together with it.
+
+A verdict is reused only if it was made on exactly the same documents (hashed); recompiling a run
+so that a document changes makes `bench.sh` judge that pair again. For a readyset run that never
+reached the gate, the planning document is recovered from the final tree (including
+`readyset/changes/archive/`) and labelled as such.
+
 **Statistics:**
+- **Comparison set:** only tasks where both arms have a valid run. Both arms' means are taken over
+  that same set, and the report names the excluded tasks.
+- **Harness errors** (the benchmark failed, not the workflow) are never dropped silently: they are
+  listed under Run health, excluded from the paired comparison and from judging, and scored 0 in a
+  separate **intent-to-treat** line, which is a worst-case lower bound.
 - Results are paired by task: readyset − plan, averaged over models and reps.
 - 95% confidence intervals use a cluster bootstrap over tasks (tasks are the unit that generalises).
 - An exact sign test runs over the per-task deltas.
@@ -158,6 +178,9 @@ between judges. Judges are told not to reward length or structure. The rubrics a
 
 ## Before you publish numbers
 
+0. Run each label from **one** process. `run.sh` takes a lock (`results/<label>/.lock`) and refuses
+   to start while another live process holds it; two processes on one label share workspaces and
+   destroy each other's repos.
 1. Run `./preflight.sh`, then `./run.sh T01 --reps 1` and open the two `bundle.md` files by hand.
    Confirm each arm really went through its whole flow (check `metrics.json` → `events`).
 2. Run the full matrix with at least 3 reps (`runsPerCell`).
@@ -190,4 +213,8 @@ between judges. Judges are told not to reward length or structure. The rubrics a
   the /readyset arm never executed. That is a host-compatibility bug, not a task-specific tweak;
   it was fixed in readyset 0.11.2 before any readyset result was scored. Each run records the
   readyset version and commit in `run-manifest.json`.
+- **First run (`deepseek-r1`) was contaminated.** Two `run.sh` processes ran the same label at once
+  and deleted each other's workspaces; three readyset cells (T03, T06, T07) were lost as harness
+  errors, and several others may have been affected. The label lock now prevents this; that run's
+  numbers should not be quoted.
 - **Timing and tokens** depend on provider load. Arm order alternates per rep to spread the drift.
