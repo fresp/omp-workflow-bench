@@ -78,6 +78,31 @@ const value = (r, key) => {
 	}
 };
 
+/**
+ * Gated-only hidden-test rate: like the comparison set, but any run whose review gate was
+ * bypassed counts as 0 even when it completed, because it does not test the gated workflow its
+ * score would otherwise be credited to. Shown next to the main and intent-to-treat figures so
+ * neither can be quoted without the other.
+ */
+const gated = (() => {
+	const rate = (t, a) => {
+		const rows = common.filter((r) => r.task === t && r.arm === a);
+		return rows.length
+			? mean(rows.map((r) => (r.gateBypass?.length ? 0 : r.hiddenPassRate)))
+			: 0;
+	};
+	const paired = taskIds.map((t) => ({ task: t, plan: rate(t, "plan"), readyset: rate(t, "readyset") }));
+	paired.forEach((p) => (p.delta = p.readyset - p.plan));
+	return {
+		n: paired.length,
+		plan: mean(paired.map((p) => p.plan)),
+		readyset: mean(paired.map((p) => p.readyset)),
+		delta: mean(paired.map((p) => p.delta)),
+		ci: bootstrapCI(paired.map((p) => [p.delta]), (xs) => mean(xs)),
+		sign: signTest(paired.map((p) => p.delta)),
+	};
+})();
+
 /** Per task: mean(readyset) − mean(plan) over all models × reps. */
 function pairedByTask(key, rows = common) {
 	return taskIds
@@ -242,6 +267,9 @@ md.push(
 md.push(
 	`- **Intent-to-treat, worst case (all ${itt.n} attempted tasks; every failed run and every harness error scored 0 — harness errors are the benchmark's fault, so this is a lower bound, not a finding about either workflow):** /plan ${pct(itt.plan)} vs /readyset ${pct(itt.readyset)} — Δ ${signed(itt.delta, pct)} (95% CI ${ci(itt.ci, pct)}; p=${itt.sign.p.toFixed(3)})`,
 );
+md.push(
+	`- **Gated-only (${gated.n} compared tasks; a completed run whose review gate was bypassed scores 0 — it does not test the gated workflow its score would be credited to):** /plan ${pct(gated.plan)} vs /readyset ${pct(gated.readyset)} — Δ ${signed(gated.delta, pct)} (95% CI ${ci(gated.ci, pct)}; p=${gated.sign.p.toFixed(3)})`,
+);
 if (bypassed.length) md.push(`- **⚠ Review gate bypassed** (code changed with no approval) in ${bypassed.length} run(s): ${bypassed.map((r) => `${r.task}/${r.arm}/r${r.rep}`).join(", ")}. Their hidden-test scores are included above but the runs violate readyset's own "no execution without approval" guarantee.`);
 for (const kind of ["plan", "code"]) {
 	if (!judged[kind]) continue;
@@ -343,7 +371,7 @@ md.push("See README.md → Methodology for what each number means and its known 
 writeFileSync(join(base, "report.md"), `${md.join("\n")}\n`);
 writeFileSync(
 	join(base, "summary.json"),
-	`${JSON.stringify({ label, taskCount: taskIds.length, models, reps, objective: objective.map(({ fmt, ...o }) => o), judged: Object.fromEntries(Object.entries(judged).map(([k, v]) => [k, { dims: v.dims, perJudge: v.perJudge, interJudgeAgreement: v.interJudgeAgreement }])), perTask, statusCounts, comparedTasks: taskIds, excludedTasks, intentToTreat: itt, gateBypassed: bypassed.map((r) => ({ task: r.task, rep: r.rep, files: r.gateBypass })), harnessErrors: harnessErrors.map((r) => ({ task: r.task, arm: r.arm, rep: r.rep, error: r.harnessError })) }, null, 2)}\n`,
+	`${JSON.stringify({ label, taskCount: taskIds.length, models, reps, objective: objective.map(({ fmt, ...o }) => o), judged: Object.fromEntries(Object.entries(judged).map(([k, v]) => [k, { dims: v.dims, perJudge: v.perJudge, interJudgeAgreement: v.interJudgeAgreement }])), perTask, statusCounts, comparedTasks: taskIds, excludedTasks, intentToTreat: itt, gatedOnly: gated, gateBypassed: bypassed.map((r) => ({ task: r.task, rep: r.rep, files: r.gateBypass })), harnessErrors: harnessErrors.map((r) => ({ task: r.task, arm: r.arm, rep: r.rep, error: r.harnessError })) }, null, 2)}\n`,
 );
 console.log(`report → results/${label}/report.md`);
 

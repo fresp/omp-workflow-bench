@@ -86,13 +86,24 @@ for (const run of listRunDirs(label)) {
 
 	// ---------- grounding: do paths the plan mentions exist (or get created)? ----------
 	const baseFiles = new Set(walk(task.fixtureDir));
+	// A ref that a plan cites without the fixture's own directory prefix is the same file, not an
+	// invention: normalize every src/ and test/ ref against the fixture's actual layout before
+	// deciding whether the run created it. T01 readyset cited "lib/validate.mjs" for
+	// "src/lib/validate.mjs"; T09 readyset cited "src/importers/csv-parser.mjs" for a file that
+	// genuinely does not exist ("src/importers/csv.mjs") — only the latter is a real miss.
+	const byBase = new Map();
+	for (const f of baseFiles) {
+		const base = f.split("/").slice(-2).join("/");
+		if (!byBase.has(base)) byBase.set(base, f);
+	}
+	const resolveRef = (r) => (baseFiles.has(r) ? r : (byBase.get(r.split("/").slice(-2).join("/")) ?? r));
 	const created = new Set(codeFiles.map((f) => f.path));
 	const refs = [...new Set([...plan.raw.matchAll(/(?<![\w/.-])((?:src|test|tests|bin|examples|lib)\/[\w./-]+\.(?:mjs|js|ts|json|md)|README\.md|CHANGELOG\.md|package\.json)/g)].map((m) => m[1]))];
 	const grounding = {
 		refs: refs.length,
-		existing: refs.filter((r) => baseFiles.has(r)).length,
-		createdByRun: refs.filter((r) => !baseFiles.has(r) && created.has(r)).length,
-		dangling: refs.filter((r) => !baseFiles.has(r) && !created.has(r)),
+		existing: refs.filter((r) => baseFiles.has(resolveRef(r))).length,
+		createdByRun: refs.filter((r) => !baseFiles.has(resolveRef(r)) && created.has(resolveRef(r))).length,
+		dangling: refs.filter((r) => !baseFiles.has(resolveRef(r)) && !created.has(resolveRef(r))),
 	};
 
 	const compiled = {
@@ -260,7 +271,7 @@ function bundle(task, c, plan, codeDiff, hidden) {
 | review gate | ${c.gateBypass ? `**BYPASSED** — code changed with no approval: ${c.gateBypass.join(", ")}${c.archivedByAgent ? " (agent also archived the change itself)" : ""}` : c.arm === "readyset" ? "reached" : "n/a"} |
 | planning doc source | ${c.planSource} |
 | harness error | ${c.harnessError ?? "—"} |
-| plan grounding | ${c.grounding.existing} existing + ${c.grounding.createdByRun} created / ${c.grounding.refs} refs; dangling: ${c.grounding.dangling.join(", ") || "—"} |
+| plan grounding | ${c.grounding.existing} existing + ${c.grounding.createdByRun} created / ${c.grounding.refs} refs; dangling: ${c.grounding.dangling.join(", ") || "—"} (refs are layout-normalized) |
 | sim-user answers / nudges | ${c.simUserAnswers} / ${c.nudges} |
 | wall time (prep / exec) | ${fmtMs(c.wallMs)} (${fmtMs(c.prepMs)} / ${fmtMs(c.execMs)}) |
 | tokens (prep / exec / total) | ${c.tokensPrep ?? "?"} / ${c.tokensExec ?? "?"} / ${c.tokensTotal ?? "?"} |
