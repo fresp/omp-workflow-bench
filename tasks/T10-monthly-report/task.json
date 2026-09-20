@@ -1,0 +1,15 @@
+{
+  "id": "T10",
+  "slug": "monthly-report",
+  "title": "Monthly income vs expense report",
+  "fixture": "ledger-lib",
+  "category": "feature-ambiguous",
+  "clarity": "ambiguous",
+  "expectedTouch": [
+    "src/reports/monthly.mjs",
+    "src/index.mjs",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 6
+}

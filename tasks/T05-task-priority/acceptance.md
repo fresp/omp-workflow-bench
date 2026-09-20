@@ -1,0 +1,5 @@
+- `add --priority` high|medium|low (case-insensitive input, stored lowercase), default medium, exact error message + exit 1 on invalid
+- `list` shows PRIORITY column after TITLE; sorted high→low then id
+- `list --priority X` filters; composes with --tag and --all; invalid value → error exit 1
+- legacy tasks without `priority` behave as medium (display, filter, sort) without migration
+- usage text + README updated; tests added

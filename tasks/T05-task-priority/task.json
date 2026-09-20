@@ -1,0 +1,16 @@
+{
+  "id": "T05",
+  "slug": "task-priority",
+  "title": "Task priorities",
+  "fixture": "taskflow-cli",
+  "category": "feature-small",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/commands/add.mjs",
+    "src/commands/list.mjs",
+    "src/cli.mjs",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 8
+}

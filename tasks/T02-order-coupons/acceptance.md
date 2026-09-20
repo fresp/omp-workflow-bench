@@ -1,0 +1,6 @@
+- POST /coupons (201) with validation (400 VALIDATION_FAILED) and duplicate detection (409 CONFLICT), codes case-insensitive & stored upper-case
+- POST /orders accepts `couponCode`; response has `couponCode` (upper-cased or null) and `couponDiscountCents`
+- coupon applied to subtotal after sale discounts; percent rounded once half-up; fixed capped so total ≥ 0
+- COUPON_INVALID / COUPON_EXPIRED (clock-based, strictly after expiresAt) / COUPON_MIN_NOT_MET (subtotal ≥ min passes)
+- `discountCents` still product discounts only; orders without coupon unchanged
+- money logic stays in pricing service; time via src/lib/clock.mjs; README updated; tests added

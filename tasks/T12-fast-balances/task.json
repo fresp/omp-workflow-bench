@@ -1,0 +1,13 @@
+{
+  "id": "T12",
+  "slug": "fast-balances",
+  "title": "Balances are slow on large ledgers",
+  "fixture": "ledger-lib",
+  "category": "performance",
+  "clarity": "partial",
+  "expectedTouch": [
+    "src/ledger.mjs",
+    "test/"
+  ],
+  "hiddenTestCount": 4
+}

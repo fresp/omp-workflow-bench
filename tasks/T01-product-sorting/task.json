@@ -1,0 +1,14 @@
+{
+  "id": "T01",
+  "slug": "product-sorting",
+  "title": "Sort products by price or name",
+  "fixture": "shoplite-api",
+  "category": "feature-small",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/routes/products.mjs",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 7
+}

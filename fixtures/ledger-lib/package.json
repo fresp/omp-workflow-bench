@@ -1,0 +1,14 @@
+{
+  "name": "ledger-lib",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Small bookkeeping library: accounts, transfers, balances, CSV import. Zero runtime dependencies.",
+  "main": "src/index.mjs",
+  "exports": { ".": "./src/index.mjs" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "example": "node examples/basic.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

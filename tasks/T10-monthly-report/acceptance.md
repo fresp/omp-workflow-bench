@@ -1,0 +1,6 @@
+- monthlyReport(ledger, { from?, to? }) exported from src/index.mjs → [{ month, income, expense, net }] ascending, integer cents
+- income = from income account; expense = to expense account; asset/liability transfers & refunds excluded
+- month bucketed in Asia/Jakarta (UTC+7) regardless of the date string's offset
+- gap months filled with zeros between first and last activity; empty ledger → []
+- from/to inclusive; with both given, exactly that span (zeros where empty)
+- README + tests

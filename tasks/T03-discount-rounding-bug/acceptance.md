@@ -1,0 +1,5 @@
+- root cause identified: discount rounded per unit then multiplied, contrary to README rule
+- fix applies the percentage to the line total and rounds once, half-up, in the pricing service
+- line `discountCents` = gross − net stays consistent; order totals consistent
+- regression test(s) with the reported numbers (4 × 199 @ 25% = 597)
+- no unrelated changes; existing tests pass

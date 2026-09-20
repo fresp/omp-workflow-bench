@@ -1,0 +1,15 @@
+{
+  "id": "T04",
+  "slug": "rate-limiting",
+  "title": "Rate limiting before the public launch",
+  "fixture": "shoplite-api",
+  "category": "feature-ambiguous",
+  "clarity": "ambiguous",
+  "expectedTouch": [
+    "src/lib/rate-limit.mjs",
+    "src/app.mjs",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 9
+}

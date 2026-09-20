@@ -1,0 +1,15 @@
+{
+  "id": "T08",
+  "slug": "storage-v2-migration",
+  "title": "Storage format v2 with automatic migration",
+  "fixture": "taskflow-cli",
+  "category": "migration",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/storage/",
+    "src/commands/",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 8
+}

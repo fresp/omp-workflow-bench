@@ -1,0 +1,193 @@
+# readyset-bench
+
+An end-to-end benchmark comparing omp's native **`/plan`** with the **`/readyset`** extension. It
+covers the whole path from a feature request to executed, tested code:
+
+```
+feature request + repo state ──► preparation (plan | grill → explore → propose) ──► approval ──► execution ──► graded result
+```
+
+Both arms run the same model on the same request, in the same repository snapshot, with the same
+simulated user answering their questions. The workflow is the only thing that differs.
+
+## Quick start
+
+```bash
+./preflight.sh                 # checks omp, models, the extension and the task set. Changes nothing.
+./run.sh T01 --reps 1          # one task, one rep, both arms: sanity check the real thing
+./run.sh                       # full matrix (resumable: re-run with --label <label> after an interruption)
+./compile.sh                   # grade every run → bundle.md per run + compiled.csv
+./bench.sh                     # blind LLM judging + results/<label>/report.md
+./insights.sh                  # improvement digest → results/<label>/improve.md (reads only, no LLM calls)
+node harness/calibrate.mjs export   # optional but recommended before publishing: human-check the judges
+```
+
+Configuration is split across two files:
+- **`models.txt`** lists the models under test, one per line.
+- **`bench.config.json`** holds reps, parallelism, timeouts, the simulated-user model, judge
+  models and the path to the readyset extension.
+
+A run is written to `results/<label>/`, where the label is a timestamp unless you pass `--label`.
+
+## What's in the box
+
+| Path | What |
+| --- | --- |
+| `fixtures/` | Three small, realistic, zero-dependency Node projects: `shoplite-api` (HTTP API), `taskflow-cli` (CLI), `ledger-lib` (library). Each has conventions in its README, seams to reuse, and a green test suite. |
+| `tasks/T01…T12/` | 12 change requests, 4 per fixture (details below). |
+| `tasks/*/request.md` | The only text either workflow receives. |
+| `tasks/*/persona.md` | Private facts the simulated user answers from, and only when asked. |
+| `tasks/*/acceptance.md` | Ground truth for the judges. The workflows never see it. |
+| `tasks/*/hidden-tests/` | Tests copied into the final code after the run. They are the objective score. |
+| `tasks/*/reference/` | A reference solution. Used only to prove the hidden tests are satisfiable. |
+| `harness/` | Drivers, grading, judging, reporting. |
+| `rubric/` | Prompts for the simulated user and the two judges. |
+| `scripts/validate-tasks.mjs` | Proves every task is well-formed: hidden tests fail on the base, pass on the reference, and the fixture's own suite stays green. |
+| `scripts/smoke-offline.sh` | Runs the whole pipeline against a fake omp and a fake LLM (no tokens spent). |
+
+### The tasks
+
+| ID | Fixture | Category | Clarity | Hidden tests |
+| --- | --- | --- | --- | ---: |
+| T01 Sort products | shoplite-api | feature-small | clear | 7 |
+| T02 Coupon codes | shoplite-api | feature-multi-file | partial | 12 |
+| T03 Discount rounding bug | shoplite-api | bugfix | clear | 5 |
+| T04 Rate limiting | shoplite-api | feature-ambiguous | ambiguous | 9 |
+| T05 Task priorities | taskflow-cli | feature-small | clear | 8 |
+| T06 Storage repository + atomic writes | taskflow-cli | refactor | clear | 6 |
+| T07 Recurring tasks | taskflow-cli | feature-ambiguous | ambiguous | 12 |
+| T08 Storage v2 + migration | taskflow-cli | migration | clear | 8 |
+| T09 CSV quoting bug | ledger-lib | bugfix | clear | 9 |
+| T10 Monthly report | ledger-lib | feature-ambiguous | ambiguous | 6 |
+| T11 Rename `post()` → `record()` | ledger-lib | refactor-cross-cutting | clear | 6 |
+| T12 Fast balances | ledger-lib | performance | partial | 4 |
+
+Clarity levels:
+- **Clear:** the request specifies the interface and most behaviour. The persona adds only one or
+  two details a careful engineer would still check (legacy data, input case, ties).
+- **Partial:** the interface is given, but important semantics are not (rounding, caps, expiry).
+- **Ambiguous:** a one-line request. Most of the behaviour lives in the persona, and a workflow only
+  gets it by asking or by reading the code. This is where requirement elicitation is measured.
+
+Hidden tests exercise the public interface that the request names (routes, CLI flags, exported
+function names). Behaviour that only the persona knows is tested as behaviour. So a workflow loses
+points for guessing semantics wrong, never for picking a different internal file name.
+
+## How a run works
+
+Each run is one cell: task × model × rep × arm. It starts from a fresh git repo copied from the
+fixture, committed as `base`, in `workDir` (default `/tmp/readyset-bench-work`). The workspace sits
+outside this directory so the agent can't wander into `tasks/` and read hidden tests.
+
+Both arms are driven over `omp --mode rpc` with:
+- `--no-extensions` (readyset loads its own extension with `-e`)
+- `--no-skills`
+- a per-run `--config` overlay that turns memory, autolearn and advisor off, so no run learns from
+  another. `~/.omp/agent/config.yml` is never edited.
+
+**`/plan` arm** runs `omp --plan-yolo --plan-yolo-into <model> --model <model>` with the request as
+the prompt:
+1. The agent plans in read-only plan mode. Questions it asks through the `ask` tool are answered by
+   the simulated user.
+2. The approved plan is auto-accepted, the same as pressing Approve, and autosaved. That autosaved
+   file is the arm's preparation output.
+3. The agent then implements the plan in the same session.
+
+**`/readyset` arm** runs:
+1. `/readyset --model <m> --idea '<request>'`. Grilling runs, and its questions (plain chat in RPC
+   mode) are answered by the simulated user. Grilling ends when the brainstorm file is written.
+2. `/readyset --fast --model <m>`, which picks that brainstorm → Explore → Propose → review gate.
+3. At the gate, the driver snapshots proposal, design, specs and tasks (the preparation output),
+   then chooses **Approve & Execute**.
+4. Apply runs, followed by the verification send-back (the tool's default option), then code review,
+   then "Not yet" for archiving.
+
+**Models.** Each line of `models.txt` is used for planning and execution in both arms, so the
+comparison is workflow against workflow. The `@config` line instead runs each arm exactly as
+`~/.omp/agent/config.yml` configures it:
+- interactive `/plan` plans with `modelRoles.plan` and executes with `modelRoles.default`
+- `/readyset` pins `readyset.model.default` for every turn
+
+Treat `@config` as an "out of the box" secondary comparison, not the fair one. Each run records
+omp's `routedModels`, so the report flags any run where a fallback model was used.
+
+**Simulated user.** A small model is given the request, the persona and a few general facts (solo
+developer, commit-only git, no CI). Its rules:
+- answer only what is asked, from the persona
+- never volunteer an unasked fact
+- say "no preference" to anything the persona doesn't cover
+- approve when asked to approve
+
+Every exchange is logged in `sim-user.ndjson`. Both arms get the same user, so asking good
+questions is rewarded the same way for both.
+
+**Stopping rules.** A run ends when the workflow finishes (for /plan: idle after the plan is
+approved and the last message isn't a question; for /readyset: after the archive prompt), or on the
+time limit (`limits.runMinutes`). If an agent stalls without asking anything, it gets a neutral
+nudge ("Please continue." / "Please write the brainstorm file now." / re-running `/readyset`), up
+to `limits.maxNudges`. Nudges are counted and reported.
+
+## What is measured
+
+**Objective, from `compile.sh`:**
+- **hidden-test pass rate** (the headline number), and **solved** (all hidden tests pass)
+- the repo's own suite green
+- code files and lines changed
+- files touched outside the task's expected scope
+- code changed before approval (a planning phase is supposed to be read-only)
+- **plan grounding**: file paths the plan mentions that neither exist in the repo nor get created
+  (dangling)
+- questions answered by the user, and nudges
+- wall time and tokens, both split into prep (start → approval) and exec (approval → end)
+
+**Judged, from `bench.sh`.** Pairwise and blind, run separately on two things:
+- **plan**: the preparation documents, normalized so tool vocabulary like "readyset", change-dir
+  paths and "plan mode" is removed
+- **code**: the code-only diff, with workflow artefacts excluded
+
+The judges get the request, the ground truth (`acceptance.md`) and the base repository. Each judge
+model sees every pair twice, with A/B positions swapped. A dimension counts as a win only when both
+orders agree; otherwise it's a tie. The report shows position consistency per judge and agreement
+between judges. Judges are told not to reward length or structure. The rubrics are in `rubric/`.
+
+**Statistics:**
+- Results are paired by task: readyset − plan, averaged over models and reps.
+- 95% confidence intervals use a cluster bootstrap over tasks (tasks are the unit that generalises).
+- An exact sign test runs over the per-task deltas.
+- Judge win rate is (wins + ½ ties) / comparisons.
+
+## Before you publish numbers
+
+1. Run `./preflight.sh`, then `./run.sh T01 --reps 1` and open the two `bundle.md` files by hand.
+   Confirm each arm really went through its whole flow (check `metrics.json` → `events`).
+2. Run the full matrix with at least 3 reps (`runsPerCell`).
+3. Calibrate the judges: `node harness/calibrate.mjs export --n 12`, review the blind pairs, fill in
+   `verdicts.json`, then `node harness/calibrate.mjs score`. With kappa below about 0.6, trust the
+   hidden tests and treat the judge numbers as indicative.
+4. Publish `report.md` together with this repository, `results/<label>/run-manifest.json` (omp
+   version, readyset commit, configs) and the per-run bundles, so anyone can re-grade.
+
+## Known limitations
+
+- **12 tasks on small fixtures.** Real repositories are larger and messier. Grounding pressure is
+  lower here than in production code.
+- **Built by readyset's author.** The tasks were written with the reference solutions in mind,
+  before either workflow was run on them. The hidden tests, personas and rubrics are published so
+  anyone can check the fairness.
+- **Simulated user vs. a real one.** An LLM playing the user is more consistent than a person, and
+  may be more or less forthcoming. The persona rules try to hold it to "answer only what's asked".
+- **Different interaction surfaces.** Headless, `/plan` asks through omp's structured `ask` picker,
+  while readyset's grilling falls back to plain-chat questions (RPC has no `askDialog`). Both reach
+  the same simulated user, but the surfaces differ from interactive use.
+- **The readyset arm receives the request through `--idea '…'`.** The text is passed verbatim,
+  line breaks included. The only change is that single quotes inside it become ’, so they survive
+  readyset's argument parser.
+- **Planning output excludes exploration notes.** For readyset, the judged preparation output is
+  the requirements record, proposal, design, specs and tasks; `EXPLORATION.md` is left out. For
+  /plan it's the approved plan file. Neither arm's exploration transcript is judged.
+- **A readyset bug was fixed because of this benchmark.** The first full run (omp 18.2.0,
+  readyset 0.11.1) showed that under omp's RPC host the review gate was silently discarded, so
+  the /readyset arm never executed. That is a host-compatibility bug, not a task-specific tweak;
+  it was fixed in readyset 0.11.2 before any readyset result was scored. Each run records the
+  readyset version and commit in `run-manifest.json`.
+- **Timing and tokens** depend on provider load. Arm order alternates per rep to spread the drift.

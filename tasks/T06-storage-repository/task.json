@@ -1,0 +1,17 @@
+{
+  "id": "T06",
+  "slug": "storage-repository",
+  "title": "Refactor storage into one repository with atomic writes",
+  "fixture": "taskflow-cli",
+  "category": "refactor",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/storage/task-repository.mjs",
+    "src/commands/add.mjs",
+    "src/commands/list.mjs",
+    "src/commands/done.mjs",
+    "src/commands/remove.mjs",
+    "test/"
+  ],
+  "hiddenTestCount": 6
+}

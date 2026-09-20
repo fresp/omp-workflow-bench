@@ -1,0 +1,20 @@
+{
+  "name": "readyset-bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end benchmark: omp native /plan vs the /readyset extension \u2014 from feature request to executed, tested code.",
+  "scripts": {
+    "preflight": "node harness/preflight.mjs",
+    "validate": "node scripts/validate-tasks.mjs",
+    "smoke": "bash scripts/smoke-offline.sh",
+    "run": "node harness/run.mjs",
+    "compile": "node harness/compile.mjs",
+    "judge": "node harness/judge.mjs",
+    "report": "node harness/report.mjs",
+    "insights": "node harness/insights.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

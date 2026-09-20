@@ -1,0 +1,12 @@
+{
+  "name": "shoplite-api",
+  "version": "0.4.2",
+  "private": true,
+  "type": "module",
+  "description": "Small storefront HTTP API (products, orders). Zero runtime dependencies.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

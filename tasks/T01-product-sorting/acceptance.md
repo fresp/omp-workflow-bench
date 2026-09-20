@@ -1,0 +1,6 @@
+- `sort=price_asc` / `price_desc` order by `priceCents`; `sort=name` orders alphabetically, case-insensitive
+- sort composes with `q` and `category` filters
+- ties keep creation (id) order; sorting uses list price, not discounted price
+- unknown values → 400 `{ error: { code: "INVALID_QUERY", … } }`; empty `sort=` → default order
+- no sort → unchanged creation order; existing tests still pass
+- README documents the parameter; tests added for the new behaviour

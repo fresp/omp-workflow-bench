@@ -1,0 +1,4 @@
+- Ledger.record() with identical signature/behaviour; post() delegates to it and returns the same entry
+- post() emits DeprecationWarning code LEDGER_DEP_POST once per process, message pointing to record()
+- all internal call sites (csv importer, examples, README usage) use record(); README documents the deprecation
+- tests moved to record() plus a test of the alias; CHANGELOG.md "Unreleased" entry; version unchanged

@@ -1,0 +1,13 @@
+{
+  "id": "T03",
+  "slug": "discount-rounding-bug",
+  "title": "Order totals off by a few cents on discounted multi-quantity lines",
+  "fixture": "shoplite-api",
+  "category": "bugfix",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/services/pricing.mjs",
+    "test/"
+  ],
+  "hiddenTestCount": 5
+}

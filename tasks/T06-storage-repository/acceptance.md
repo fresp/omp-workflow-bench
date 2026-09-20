@@ -1,0 +1,6 @@
+- src/storage/task-repository.mjs exports createTaskRepository(env) → { load, save }
+- load on missing file → { nextId: 1, tasks: [] } without creating it; save creates the directory
+- save writes temp file in same dir then renames; no temp files left; 2-space JSON preserved
+- no command imports node:fs; all four commands use the repository
+- corrupt tasks.json → "Error: …<path>…" exit 1 instead of a crash
+- CLI behaviour/output unchanged; tests added for the repository

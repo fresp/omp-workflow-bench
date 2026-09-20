@@ -1,0 +1,6 @@
+- `add --every day|week|month`; invalid value → error exit 1; `--every` without `--due` → error exit 1; stored as `every`
+- `done` on a recurring task marks it done and creates the next occurrence (new id, same title/tags/every)
+- next due computed from previous due date (not completion date); month clamps to last day (01-31 → 02-28, leap years handled)
+- `done` output: Completed line + `Next: #id due date`; completing an already-done task creates nothing
+- list marks recurring tasks with "(every …)"; remove deletes only that task
+- date maths in src/dates.mjs; usage text + README; tests

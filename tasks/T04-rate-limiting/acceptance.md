@@ -1,0 +1,6 @@
+- keyed by `x-api-key`, falling back to client IP when absent
+- 60 requests / 60 s fixed window aligned to the clock; uses src/lib/clock.mjs
+- all routes except GET /health
+- 429 + standard error body code RATE_LIMITED + Retry-After (ceil seconds to window end)
+- X-RateLimit-Limit / X-RateLimit-Remaining on every limited response; rejected requests don't consume quota
+- implemented as middleware via router.use; in-memory per app instance; README + tests

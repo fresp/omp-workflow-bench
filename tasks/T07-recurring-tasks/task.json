@@ -1,0 +1,18 @@
+{
+  "id": "T07",
+  "slug": "recurring-tasks",
+  "title": "Recurring tasks",
+  "fixture": "taskflow-cli",
+  "category": "feature-ambiguous",
+  "clarity": "ambiguous",
+  "expectedTouch": [
+    "src/commands/add.mjs",
+    "src/commands/done.mjs",
+    "src/commands/list.mjs",
+    "src/dates.mjs",
+    "src/cli.mjs",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 12
+}

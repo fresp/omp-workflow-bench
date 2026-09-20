@@ -1,0 +1,6 @@
+- v2 shape: schemaVersion 2, tags as array; new files created as v2
+- v1 detected by missing schemaVersion → migrated in memory, written back as v2, byte-exact backup tasks.v1.bak.json (never overwritten)
+- migration triggered by any command incl. list; tags split/trim/drop-empty; missing tags → []; other fields preserved
+- schemaVersion > 2 → clean error exit 1, file untouched
+- CLI input/output unchanged (TAGS column comma-joined, --tag filter)
+- migration centralised; tests for migration edge cases

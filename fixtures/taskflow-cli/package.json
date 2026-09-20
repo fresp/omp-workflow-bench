@@ -1,0 +1,12 @@
+{
+  "name": "taskflow-cli",
+  "version": "1.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Tiny personal task manager for the terminal. Zero runtime dependencies.",
+  "bin": { "taskflow": "bin/taskflow.mjs" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

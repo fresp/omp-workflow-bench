@@ -1,0 +1,8 @@
+# One model per line — each model is used for BOTH planning and execution in BOTH arms, so the only
+# difference between arms is the workflow (/plan vs /readyset).
+#
+# The special line `@config` runs each arm exactly as ~/.omp/agent/config.yml configures it instead:
+#   plan     → plans with modelRoles.plan, executes with modelRoles.default (what interactive /plan does)
+#   readyset → readyset.model.default for every turn (what /readyset does)
+# Use it as a secondary "out of the box" comparison; the per-model lines are the fair comparison.
+eai1/cbai/deepseek-v4.1-flash

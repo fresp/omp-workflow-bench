@@ -1,0 +1,16 @@
+{
+  "id": "T11",
+  "slug": "rename-post-to-record",
+  "title": "Rename Ledger.post() to record() with a deprecation path",
+  "fixture": "ledger-lib",
+  "category": "refactor-cross-cutting",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/ledger.mjs",
+    "src/importers/csv.mjs",
+    "examples/basic.mjs",
+    "README.md",
+    "test/"
+  ],
+  "hiddenTestCount": 6
+}

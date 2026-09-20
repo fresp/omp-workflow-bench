@@ -1,0 +1,5 @@
+- RFC 4180 quoting: quoted commas, doubled quotes, newlines inside quoted fields
+- UTF-8 BOM and CRLF handled; blank lines skipped; unquoted fields trimmed, quoted content preserved
+- `Line N:` errors use the starting physical line of the record; unterminated quote → `Line N: unterminated quoted field`
+- import is all-or-nothing (validate everything before posting)
+- no new dependencies; regression tests including the issue's row

@@ -1,0 +1,13 @@
+{
+  "id": "T09",
+  "slug": "csv-quoting-bug",
+  "title": "CSV import breaks on quoted fields",
+  "fixture": "ledger-lib",
+  "category": "bugfix",
+  "clarity": "clear",
+  "expectedTouch": [
+    "src/importers/csv.mjs",
+    "test/"
+  ],
+  "hiddenTestCount": 9
+}

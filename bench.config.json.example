@@ -1,0 +1,42 @@
+{
+    "$comment": "Edit freely. Models under test live in models.txt (one per line), like the model benchmark loop.",
+    "runsPerCell": 3,
+    "arms": [
+        "plan",
+        "readyset"
+    ],
+    "tasks": "all",
+    "parallel": 3,
+    "workDir": "/tmp/readyset-bench-work",
+    "omp": {
+        "bin": "omp",
+        "readysetExtension": "/path/to/readyset-flow/src/extensions/readyset-review.ts",
+        "extraArgs": []
+    },
+    "limits": {
+        "runMinutes": 45,
+        "idleSeconds": 25,
+        "maxSimUserAnswers": 14,
+        "maxNudges": 3
+    },
+    "simUser": {
+        "backend": "omp",
+        "model": "gpt-5.6-sol",
+        "timeoutSeconds": 180
+    },
+    "judge": {
+        "backend": "omp",
+        "models": [
+            "gpt-5.6-sol:high",
+            "gpt-5.6-luna"
+        ],
+        "swapPositions": true,
+        "parallel": 2,
+        "timeoutSeconds": 600
+    },
+    "openai": {
+        "$comment": "Only used when a backend is set to \"openai\": any OpenAI-compatible /chat/completions endpoint.",
+        "baseUrl": "https://your-gateway/v1",
+        "apiKeyEnv": "BENCH_OPENAI_API_KEY"
+    }
+}

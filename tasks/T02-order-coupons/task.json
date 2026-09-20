@@ -1,0 +1,18 @@
+{
+  "id": "T02",
+  "slug": "order-coupons",
+  "title": "Coupon codes on orders",
+  "fixture": "shoplite-api",
+  "category": "feature-multi-file",
+  "clarity": "partial",
+  "expectedTouch": [
+    "src/routes/coupons.mjs",
+    "src/routes/orders.mjs",
+    "src/services/pricing.mjs",
+    "src/store/memory-store.mjs",
+    "src/app.mjs",
+    "test/",
+    "README.md"
+  ],
+  "hiddenTestCount": 12
+}

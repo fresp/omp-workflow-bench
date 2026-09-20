@@ -1,0 +1,4 @@
+- balance() O(1) via a running per-account total maintained on post(); post stays O(1)
+- balances always include the latest post; unknown account still throws; entries read-only/frozen
+- balanceSheet/totalsByType benefit without API change
+- no new dependencies; non-flaky perf regression test (relative, not absolute ms)
