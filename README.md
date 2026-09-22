@@ -160,6 +160,13 @@ runs and `subtractTokens(final, prep)` can go negative for exec. `scripts/check-
 the two per run and warns when they differ by more than 2% (`--strict` to fail). For a run that
 never compacts (`/plan`) they agree exactly.
 
+**TODO — subagent (`task`) tokens are not accounted for.** When a run spawns a subagent via the
+`task` tool, the subagent's own reasoning happens in a separate session; its tokens appear nowhere in
+the parent's `usage` frames and so are missing from every per-run total here. The parent is charged
+only for the tokens it spends reading the echoed `<task-result>` text. This matters only for runs
+that call `task` (5 calls across v0.12, all in readyset/plan runs that delegate a sub-step); until
+the accounting is closed, treat such runs' token totals as a lower bound.
+
 **Judged, from `bench.sh`.** Pairwise and blind, run separately on two things:
 - **plan**: the preparation documents, normalized so tool vocabulary like "readyset", change-dir
   paths and "plan mode" is removed

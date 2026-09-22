@@ -451,7 +451,9 @@ function writeSection7() {
 		md.push(`**(a)** Apply re-reads what Explore/Propose read: **${agg.rereads ? `yes, ${agg.rereads} time(s)` : "no"}**. **(b)** Apply/Review is ${agg.applyTests} test call(s) vs ${agg.applyReads} read call(s) — ${pct(agg.applyReads + agg.applyTests + agg.applyEdits ? agg.applyTests / (agg.applyReads + agg.applyTests + agg.applyEdits) : null)} of Apply/Review calls are testing/verification.`);
 		md.push("");
 	}
-	md.push("**Subagent tokens.** The `task` tool's subagent output is charged to the parent session: the subagent's result is echoed inline as a tool-result message and the next assistant `message_end` carries it as **input** tokens — e.g. v0.12 T04 readyset r1 has one `task` call (1 of 5 across v0.12: T04 readyset r1, T09 readyset r2 ×2, T10 readyset r2, T11 plan r2), whose 4005-byte result is followed by a `message_end` with `input=17475 / output=77 / total=39184`. The subagent's own internal reasoning is **not** separately itemized in the parent's usage. This is a settled measurement from the traces; it is not re-derived here.");
+	md.push(
+		"**Subagent tokens are not visible in the parent's usage.** All 5 `task` calls in v0.12 (T04 readyset r1, T09 readyset r2 ×2, T10 readyset r2, T11 plan r2) are asynchronous spawns: the tool-result delivered at the call site is omp's spawn notice (560–909 bytes, \"Spawned agent … auto-delivers on yield\"), not the subagent's answer. The subagent's output arrives later — recovered through a `hub wait`/`hub jobs` snapshot as a tool-result message containing the `<task-result>` text. Only that final text is re-sent to the parent as prompt context; the subagent's own reasoning turns run in a separate session and their tokens are **not** itemized anywhere in the parent's `usage` frames. The parent is charged only for the tokens it spends reading the echoed result. (The `input=17475 / output=77 / total=39184` message_end after T04 readyset r1's `task` call belongs to the assistant message that *issues* the `hub wait`, not to the delivery.) See README → What is measured for the accounting TODO.",
+	);
 	md.push("");
 }
 
