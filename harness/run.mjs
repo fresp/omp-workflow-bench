@@ -87,12 +87,13 @@ console.log(`\ndone. next: ./compile.sh --label ${label} && ./bench.sh --label $
 async function worker() {
 	while (queue.length) {
 		const c = queue.shift();
-		const script = join(ROOT, "harness", c.arm === "plan" ? "arm-plan.mjs" : "arm-readyset.mjs");
+		const script = join(ROOT, "harness", c.arm.startsWith("plan") ? "arm-plan.mjs" : "arm-readyset.mjs");
 		const { cell } = runPaths({ cfg, label, task: c.task, arm: c.arm, model: c.model, rep: c.rep });
 		const log = createWriteStream(join(RESULTS, label, "logs", `${c.task.id}__${cell}.log`));
 		const started = Date.now();
+		const extra = c.arm.startsWith("plan") ? [] : ["--arm", c.arm];
 		const code = await new Promise((resolve) => {
-			const child = spawn(process.execPath, [script, "--task", c.task.id, "--model", c.model, "--rep", String(c.rep), "--label", label], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+			const child = spawn(process.execPath, [script, "--task", c.task.id, "--model", c.model, "--rep", String(c.rep), "--label", label, ...extra], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
 			child.stdout.pipe(log, { end: false });
 			child.stderr.pipe(log, { end: false });
 			child.on("close", resolve);

@@ -26,9 +26,13 @@ export function listRunDirs(label) {
 		for (const cell of readdirSync(join(base, taskDir)).sort()) {
 			const dir = join(base, taskDir, cell);
 			if (!statSync(dir).isDirectory() || !/__r\d+$/.test(cell)) continue;
-			const m = /^(plan|readyset)__(.+)__r(\d+)$/.exec(cell);
+			const m = /^(plan|readyset(?:-(?:fast|full|auto))?)__(.+)__r(\d+)$/.exec(cell);
 			if (!m) continue;
-			out.push({ dir, taskDir, cell, arm: m[1], modelSlug: m[2], rep: Number(m[3]) });
+			// `arm` stays the family ("plan"/"readyset") so every existing comparison keeps working;
+			// the lane lives in `lane` and the exact directory arm name in `armRaw`. A bare
+			// "readyset" is the historical alias for readyset-fast.
+			const lane = m[1] === "plan" ? null : m[1] === "readyset" ? "fast" : m[1].replace(/^readyset-/, "");
+			out.push({ dir, taskDir, cell, arm: m[1] === "plan" ? "plan" : "readyset", armRaw: m[1], lane, modelSlug: m[2], rep: Number(m[3]) });
 		}
 	}
 	return out;

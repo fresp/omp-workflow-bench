@@ -207,6 +207,31 @@ reached the gate, the planning document is recovered from the final tree (includ
 - An exact sign test runs over the per-task deltas.
 - Judge win rate is (wins + ½ ties) / comparisons.
 
+## Two-tier benchmarking
+
+**Quick check — after each wave of readyset changes.** Run the subset the wave touches on the lanes
+those tasks should use, then gate on `quick-check.md`:
+
+```bash
+./run.sh T03 T04 T09 T11 --arms readyset-fast,readyset-full --reps 1 --label wave-7
+./compile.sh --label wave-7 && ./bench.sh --label wave-7
+./quick-check.sh --label wave-7 --baseline v0.12   # → results/wave-7/quick-check.md
+```
+
+`quickCheck` in `bench.config.json` holds the criteria (per-task hidden drop, must-improve tasks,
+expected lanes, clear-task wall-time drop, dangling refs, protected paths, user-edits-preserved,
+T03 code judge, review skip rate). It is a fast smoke gate, not a score: it compares a few tasks to a
+baseline label's readyset arm and prints pass/fail per criterion.
+
+**Full matrix — before a release or any public claim.** All tasks, ≥3 reps, both lanes, the judges,
+and the caveats in "Before you publish numbers". Quote `report.md` with its `run-manifest.json`.
+
+**Lanes.** readyset's arms are `readyset-fast`, `readyset-full` and `readyset-auto`; `--lane auto`
+omits the flag and lets the brainstorm's recorded lane decide (the effective lane and its source are
+recorded per run). The report has *By lane* and *Phase outcomes* tables, built from readyset's own
+`<!-- readyset-phase -->` events in each change's `CONTEXT.md` (readyset ≥ 0.13; older runs render
+"—").
+
 ## Before you publish numbers
 
 0. Run each label from **one** process. `run.sh` takes a lock (`results/<label>/.lock`) and refuses

@@ -108,6 +108,38 @@ for (const t of taskIds) {
 	md.push(`| ${t} ${tasks[t]?.title ?? ""} | ${tasks[t]?.clarity ?? ""} | ${hid(ps)} | ${hid(ss)} | ${status} | ${range(ps, tokOf, kfmt)} → ${range(ss, tokOf, kfmt)} | ${range(ps, wallOf, mfmt)} → ${range(ss, wallOf, mfmt)} | ${nRuns} |`);
 }
 
+// ---------------------------------------------------------------- 1b. baseline -------------------
+if (argv.baseline) {
+	h(`## 1b. Baseline comparison (${label} vs ${argv.baseline})`);
+	const baseRuns = listRunDirs(argv.baseline).map((r) => ({ ...r, metrics: readJson(join(r.dir, "metrics.json")), compiled: readJson(join(r.dir, "compiled.json")) }));
+	if (!baseRuns.length) {
+		md.push(`_No runs under results/${argv.baseline}._`);
+	} else {
+		// Warn when the two labels are not comparable (different model / omp / fixture versions).
+		const man = (l) => readJson(join(RESULTS, l, "run-manifest.json"), {});
+		const m1 = man(label);
+		const m2 = man(argv.baseline);
+		const diffs = [];
+		if (m1.omp?.version !== m2.omp?.version) diffs.push(`omp ${m2.omp?.version} → ${m1.omp?.version}`);
+		if (m1.readyset?.version !== m2.readyset?.version) diffs.push(`readyset ${m2.readyset?.version} → ${m1.readyset?.version}`);
+		if (JSON.stringify(m1.models) !== JSON.stringify(m2.models)) diffs.push(`models ${JSON.stringify(m2.models)} → ${JSON.stringify(m1.models)}`);
+		if (diffs.length) md.push(`⚠ labels differ: ${diffs.join("; ")} — comparisons below are indicative only.`);
+		const baseP = (t) => baseRuns.filter((r) => r.taskDir.startsWith(t) && r.arm === "plan");
+		const curP = (t) => picks(t, "plan");
+		md.push("", "| Task | baseline /plan hidden | this /plan hidden | baseline /plan tokens | this /plan tokens |", "| --- | ---: | ---: | ---: | ---: |");
+		for (const t of taskIds) {
+			const bp = baseP(t);
+			const cp = curP(t);
+			const mean = (rs, get) => {
+				const v = rs.map(get).filter((x) => typeof x === "number");
+				return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+			};
+			const rate = (rs) => mean(rs.filter((r) => r.compiled), (r) => r.compiled.hiddenPassRate);
+			md.push(`| ${t} | ${pct(rate(bp))} | ${pct(rate(cp))} | ${kfmt(mean(bp, (r) => r.compiled?.tokensTotal))} | ${kfmt(mean(cp, (r) => r.compiled?.tokensTotal))} |`);
+		}
+	}
+}
+
 // ---------------------------------------------------------------- 2. readyset failures ----------
 h("## 2. Readyset runs that did not finish");
 const failed = runs.filter((r) => r.arm === "readyset" && r.metrics?.status !== "done");

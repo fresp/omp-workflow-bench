@@ -5,7 +5,7 @@
 //   3. gate: Approve & Execute (same as the /plan arm's auto-approve) → Apply → Code review → "Not yet"
 //
 // Usage: node harness/arm-readyset.mjs --task T01 --model <spec> --rep 1 --label <run-label>
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
@@ -14,11 +14,15 @@ import { createSimUser } from "./lib/sim-user.mjs";
 import { answerAgentUi, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, tokenSummary, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
-const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" } } });
+const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" }, arm: { type: "string", default: "readyset-fast" } } });
 const cfg = loadConfig();
 const task = loadTask(listTasks([argv.task])[0].dirName);
 const models = resolveArmModels("readyset", argv.model);
-const paths = runPaths({ cfg, label: argv.label, task, arm: "readyset", model: argv.model, rep: argv.rep });
+// The arm name carries the lane: readyset-fast / readyset-full / readyset-auto. A bare "readyset"
+// is the historical alias for readyset-fast.
+const arm = argv.arm;
+const lane = arm === "readyset" ? "fast" : arm.replace(/^readyset-/, "");
+const paths = runPaths({ cfg, label: argv.label, task, arm, model: argv.model, rep: argv.rep });
 const { baseSha, overlay } = prepareRun(paths, task);
 
 if (!cfg.omp.readysetExtension || !existsSync(cfg.omp.readysetExtension)) {
@@ -27,7 +31,8 @@ if (!cfg.omp.readysetExtension || !existsSync(cfg.omp.readysetExtension)) {
 }
 
 const metrics = {
-	arm: "readyset",
+	arm,
+	lane,
 	task: task.id,
 	model: argv.model,
 	planModel: models.planModel,
@@ -158,7 +163,21 @@ rpc.on("frame", (frame) => {
 rpc.on("spawn-error", (e) => metrics.errors.push(`spawn: ${e.message}`));
 
 const quote = (text) => `'${text.replace(/'/g, "’")}'`; // readyset's arg parser keeps everything inside single quotes verbatim
-const pipelineCommand = () => `/readyset --fast --model ${models.planModel}`;
+
+/** The lane recorded in the chosen brainstorm's frontmatter (`lane: fast|full`), for --lane auto. */
+function readBrainstormLane(dir) {
+	for (const f of listMd(dir)) {
+		const p = join(dir, f);
+		if (!existsSync(p)) continue;
+		const m = /^\s*lane:\s*(\w+)/im.exec(readFileSync(p, "utf8"));
+		if (m) return m[1].toLowerCase();
+	}
+	return null;
+}
+
+// --lane fast / --lane full are explicit; --lane auto omits the flag and lets the brainstorm's
+// recorded lane win. The effective lane + its source are recorded in metrics (filled in below).
+const pipelineCommand = () => `/readyset${lane === "auto" ? "" : ` --lane ${lane}`} --model ${models.planModel}`;
 
 async function main() {
 	await Promise.race([rpc.ready, new Promise((_, rej) => setTimeout(() => rej(new Error("omp did not become ready in 120s")), 120_000))]);
@@ -269,6 +288,9 @@ if (metrics.harnessError) metrics.status = "harness-error";
 metrics.finishedAt = nowIso();
 metrics.simUserAnswers = simUser.answers;
 metrics.planCaptured = existsSync(join(paths.out, "prep", "readyset-change"));
+// The lane actually used: explicit flag, or the lane recorded in the brainstorm for --lane auto.
+metrics.laneSource = lane === "auto" ? "brainstorm" : "flag";
+metrics.effectiveLane = lane === "auto" ? readBrainstormLane(brainstormDir) ?? "unknown" : lane;
 metrics.tokens = {
 	prep: tokenSummary(prepStats) ?? tokenSummary(finalStats),
 	exec: prepStats ? subtractTokens(tokenSummary(finalStats), tokenSummary(prepStats)) : null,

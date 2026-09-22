@@ -310,6 +310,14 @@ for (const kind of ["plan", "code"]) {
 const tokens = objective.find((o) => o.key === "tokensTotal");
 const wall = objective.find((o) => o.key === "wallMin");
 md.push(`- **Cost:** tokens ${kfmt(tokens.plan)} vs ${kfmt(tokens.readyset)} per run; wall time ${num1(wall.plan)} vs ${num1(wall.readyset)} min per run`);
+if (argv.baseline && existsSync(join(RESULTS, argv.baseline))) {
+	// Baseline comparison is a light touch here: name the label and flag version drift.
+	const bMan = readJson(join(RESULTS, argv.baseline, "run-manifest.json"), {});
+	const drift = [];
+	if (bMan.omp?.version && bMan.omp.version !== manifest.omp?.version) drift.push(`omp ${bMan.omp.version} → ${manifest.omp?.version}`);
+	if (bMan.readyset?.version && bMan.readyset.version !== manifest.readyset?.version) drift.push(`readyset ${bMan.readyset.version} → ${manifest.readyset?.version}`);
+	md.push(`- **Baseline ${argv.baseline}**${drift.length ? ` (⚠ differs: ${drift.join("; ")})` : ""}: see \`results/${argv.baseline}/report.md\` for its numbers.`);
+}
 md.push("");
 md.push("Win rate = (wins + ½ ties) / comparisons, from /readyset's side; 50% = no difference. A judge verdict only counts as a win when it holds with A/B positions swapped.");
 md.push("");
@@ -384,6 +392,43 @@ if (judged.plan) {
 		md.push("");
 	}
 }
+md.push("## By lane");
+md.push("");
+if (runs.some((r) => r.lane)) {
+	md.push("| Lane | runs | hidden | solved | wall (min) | tokens | gate bypassed |");
+	md.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+	const lanes = [...new Set(runs.map((r) => r.lane).filter(Boolean))].sort();
+	for (const lane of lanes) {
+		const rows = runs.filter((r) => r.lane === lane);
+		const hidden = mean(rows.map((r) => r.hiddenPassRate));
+		const solved = mean(rows.map((r) => (r.solved ? 1 : 0)));
+		const wall = mean(rows.map((r) => (r.wallMs == null ? null : r.wallMs / 60000)));
+		const toks = mean(rows.map((r) => r.tokensTotal));
+		const bypass = rows.filter((r) => r.gateBypass?.length).length;
+		md.push(`| ${lane} | ${rows.length} | ${pct(hidden)} | ${pct(solved)} | ${num1(wall)} | ${kfmt(toks)} | ${bypass} |`);
+	}
+} else {
+	md.push("_No lane recorded (runs predate the lane dimension)._");
+}
+md.push("");
+md.push("## Phase outcomes");
+md.push("");
+if (runs.some((r) => r.outcomeCounts && Object.keys(r.outcomeCounts).length)) {
+	const agg = {};
+	for (const r of runs) for (const [k, v] of Object.entries(r.outcomeCounts ?? {})) agg[k] = (agg[k] ?? 0) + v;
+	md.push("| outcome | count |", "| --- | ---: |");
+	for (const [k, v] of Object.entries(agg).sort((a, b) => b[1] - a[1])) md.push(`| ${k} | ${v} |`);
+	const withReview = runs.filter((r) => r.review);
+	if (withReview.length) {
+		const ran = withReview.filter((r) => r.review.ran).length;
+		const fired = {};
+		for (const r of withReview) for (const t of r.review.triggersFired ?? []) fired[t] = (fired[t] ?? 0) + 1;
+		md.push("", `Review ran in ${ran}/${withReview.length} runs. Triggers that fired: ${Object.entries(fired).map(([k, v]) => `${k} ${v}`).join(", ") || "none"}.`);
+	}
+} else {
+	md.push("_No CONTEXT.md phase events (readyset < 0.13 or none written)._");
+}
+md.push("");
 for (const [field, title] of [["clarity", "By request clarity"], ["category", "By task category"]]) {
 	md.push(`## ${title}`);
 	md.push("");

@@ -14,6 +14,7 @@ import { listRunDirs, readJson, readText, resolveLabel, RESULTS, walk } from "./
 import { runTestDir } from "./lib/tests.mjs";
 import { git, makeWorkspace } from "./lib/workspace.mjs";
 import { canonicalTokens } from "./lib/tokens.mjs";
+import { outcomeCounts, phaseSummary } from "./lib/context.mjs";
 
 const { values: argv } = parseArgs({ options: { label: { type: "string" }, force: { type: "boolean", default: false } } });
 const label = resolveLabel(argv.label);
@@ -40,6 +41,11 @@ for (const run of listRunDirs(label)) {
 
 	// ---------- tokens: canonical definition from the raw log ----------
 	const canonical = canonicalTokens(join(run.dir, "rpc.ndjson"));
+
+	// ---------- lane + CONTEXT.md phase events (readyset ≥ 0.13; absent → null) ----------
+	const phases = phaseSummary(run.dir);
+	const lane = metrics.effectiveLane ?? phases.lane ?? (run.arm === "readyset" ? run.lane ?? null : null);
+	const laneSource = metrics.laneSource ?? phases.laneSource ?? (lane ? "directory" : null);
 
 	// ---------- diff: code vs workflow artefacts ----------
 	const fullDiff = readText(join(run.dir, "final", "changes.diff"));
@@ -117,6 +123,14 @@ for (const run of listRunDirs(label)) {
 		category: task.category,
 		clarity: task.clarity,
 		arm: run.arm,
+		lane,
+		laneSource,
+		// CONTEXT.md phase events (readyset ≥ 0.13) — null/empty for v0.12.
+		phaseSummary: phases.hasMarkers ? phases : null,
+		phaseOutcomes: Object.keys(phases.outcomes).length ? phases.outcomes : null,
+		outcomeCounts: outcomeCounts(run.dir),
+		review: phases.review,
+		applyDiff: phases.apply?.diff ?? null,
 		model: metrics.model,
 		planModel: metrics.planModel,
 		execModel: metrics.execModel,
@@ -284,6 +298,7 @@ function bundle(task, c, plan, codeDiff, hidden) {
 | repo's own suite | ${c.ownSuitePass}/${c.ownSuiteTotal}${c.ownSuiteGreen ? " green" : ""} |
 | code files changed | ${c.filesChanged} (+${c.linesAdded} −${c.linesDeleted}), test files ${c.testFilesChanged} |
 | unexpected files | ${c.unexpectedFiles.join(", ") || "—"} |
+| lane (source) | ${c.lane ?? "—"}${c.laneSource ? ` (${c.laneSource})` : ""}${c.phaseSummary ? ` · phases: ${Object.entries(c.phaseSummary.phases).map(([k, v]) => `${k} ${v.ms == null ? "?" : `${Math.round(v.ms / 1000)}s`}`).join(", ")}` : ""}${c.review ? ` · review ${c.review.skipped ? "skipped" : "ran"}${c.review.triggersFired?.length ? ` (${c.review.triggersFired.join(", ")})` : ""}` : ""} |
 | code changed before approval | ${c.codeChangedBeforeApproval.join(", ") || "—"} |
 | review gate | ${c.gateBypass ? `**BYPASSED** — code changed with no approval: ${c.gateBypass.join(", ")}${c.archivedByAgent ? " (agent also archived the change itself)" : ""}` : c.arm === "readyset" ? "reached" : "n/a"} |
 | planning doc source | ${c.planSource} |
@@ -323,7 +338,7 @@ function fmtMs(ms) {
 }
 
 function writeCsv(file, rows) {
-	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "workspaceEscapes", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensClientTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
+	const cols = ["task", "category", "clarity", "arm", "lane", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "workspaceEscapes", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensClientTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
 	const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 	writeFileSync(file, `${cols.join(",")}\n${rows.map((r) => cols.map((c) => esc(r[c])).join(",")).join("\n")}\n`);
 }

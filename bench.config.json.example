@@ -3,7 +3,9 @@
     "runsPerCell": 3,
     "arms": [
         "plan",
-        "readyset"
+        "readyset-fast",
+        "readyset-full",
+        "readyset-auto"
     ],
     "tasks": "all",
     "parallel": 3,
@@ -32,7 +34,24 @@
         ],
         "swapPositions": true,
         "parallel": 2,
-        "timeoutSeconds": 600
+        "timeoutSeconds": 600,
+        "retries": 2,
+        "coverageFloor": 0.9,
+        "lengthMatchChars": 8000
+    },
+    "quickCheck": {
+        "$comment": "Criteria for harness/quick-check.mjs --label <new> --baseline <label>. Each compares the new readyset arm against the baseline label.",
+        "maxHiddenDrop": 1,
+        "mustImprove": ["T11-rename-post-to-record"],
+        "lanes": {
+            "T03-discount-rounding-bug": "fast",
+            "T09-csv-quoting-bug": "fast",
+            "T04-rate-limiting": "full"
+        },
+        "clearTasks": ["T03-discount-rounding-bug", "T05-task-priority"],
+        "clearWallDropPct": 40,
+        "maxDangling": 0,
+        "userEditsPreserved": true
     },
     "openai": {
         "$comment": "Only used when a backend is set to \"openai\": any OpenAI-compatible /chat/completions endpoint.",
