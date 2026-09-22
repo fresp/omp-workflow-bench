@@ -399,12 +399,14 @@ function writeSection7() {
 	for (const arm of ["plan", "readyset"]) {
 		const armRuns = runs.filter((r) => r.arm === arm);
 		if (!armRuns.length) continue;
-		const agg = { total: {}, applyReads: 0, applyTests: 0, applyEdits: 0, rereads: 0, applyReadFiles: new Set(), distinctRead: new Set(), distinctEdit: new Set(), testRuns: 0, testsWithoutEdit: 0, ctxPerCall: 0, calls: 0 };
+		const agg = { total: {}, applyReads: 0, applyTests: 0, applyEdits: 0, rereads: 0, applyReadFiles: new Set(), distinctRead: new Set(), distinctEdit: new Set(), testRuns: 0, testsWithoutEdit: 0, ctxPerCall: 0, calls: 0, otherByName: {}, taskPhases: {}, taskCalls: 0 };
 		let lastEdit = -1;
 		for (const r of armRuns) {
 			const calls = annotateCalls(r);
 			for (const c of calls) {
 				agg.total[c.category] = (agg.total[c.category] ?? 0) + 1;
+				if (c.category === "other tools") agg.otherByName[c.tool] = (agg.otherByName[c.tool] ?? 0) + 1;
+				if (c.tool === "task") { agg.taskCalls++; (agg.taskPhases[c.phase] ??= []).push(`${r.taskDir.slice(0, 3)} r${r.rep ?? 1}`); }
 				if (c.path) {
 					if (c.category === "read") agg.distinctRead.add(c.path);
 					if (c.category === "edit/write") agg.distinctEdit.add(c.path);
@@ -428,14 +430,29 @@ function writeSection7() {
 		for (const k of ["read", "search", "edit/write", "test", "other bash", "other tools"]) md.push(`| ${k} | ${cat(k)} |`);
 		md.push(`| **total** | **${Object.values(agg.total).reduce((a, b) => a + b, 0)}** |`);
 		md.push("");
+		const otherNames = Object.entries(agg.otherByName).sort((a, b) => b[1] - a[1]);
+		if (otherNames.length) {
+			md.push("`other tools` by name:", "", "| tool | calls |", "| --- | ---: |");
+			for (const [name, n] of otherNames) md.push(`| ${name} | ${n} |`);
+			md.push(`| **total** | **${cat("other tools")}** |`, "");
+		}
 		md.push(`- distinct files read: ${agg.distinctRead.size} · distinct files edited: ${agg.distinctEdit.size}`);
 		md.push(`- test runs: ${agg.testRuns} · test runs with no edit since the previous one (repeat): ${agg.testsWithoutEdit}`);
 		md.push(`- re-reads in Apply/Review of a file already read earlier in the run: ${agg.rereads} (${pct(agg.applyReads ? agg.rereads / agg.applyReads : null)} of Apply/Review reads; ${agg.applyReadFiles.size} distinct files)`);
 		md.push(`- avg context per call (input + cache read/write): ${agg.calls ? kfmt(agg.ctxPerCall / agg.calls) : "—"}`);
 		md.push("");
+		md.push(`\`task\` (subagent) calls: ${agg.taskCalls}.`, "", "| phase | calls | runs |", "| --- | ---: | --- |");
+		for (const phase of ["grill", "explore", "propose", "apply", "review", "other"]) {
+			const where = agg.taskPhases[phase] ?? [];
+			if (!where.length) continue;
+			md.push(`| ${phase} | ${where.length} | ${where.length <= 8 ? where.join(", ") : `${where.length} calls`} |`);
+		}
+		md.push("");
 		md.push(`**(a)** Apply re-reads what Explore/Propose read: **${agg.rereads ? `yes, ${agg.rereads} time(s)` : "no"}**. **(b)** Apply/Review is ${agg.applyTests} test call(s) vs ${agg.applyReads} read call(s) — ${pct(agg.applyReads + agg.applyTests + agg.applyEdits ? agg.applyTests / (agg.applyReads + agg.applyTests + agg.applyEdits) : null)} of Apply/Review calls are testing/verification.`);
 		md.push("");
 	}
+	md.push("**Subagent tokens.** The `task` tool's subagent output is charged to the parent session: the subagent's result is echoed inline as a tool-result message and the next assistant `message_end` carries it as **input** tokens — e.g. v0.12 T04 readyset r1 has one `task` call (1 of 5 across v0.12: T04 readyset r1, T09 readyset r2 ×2, T10 readyset r2, T11 plan r2), whose 4005-byte result is followed by a `message_end` with `input=17475 / output=77 / total=39184`. The subagent's own internal reasoning is **not** separately itemized in the parent's usage. This is a settled measurement from the traces; it is not re-derived here.");
+	md.push("");
 }
 
 /** Every tool call of a run with its phase, category, normalized path and whether it was seen before. */
