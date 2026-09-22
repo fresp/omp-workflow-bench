@@ -259,6 +259,37 @@ export function listMd(dir) {
 	return readdirSync(dir).filter((f) => f.endsWith(".md"));
 }
 
+/**
+ * True when a bash command writes a file. Used by insights.mjs's section 7 so a file edited through
+ * `sed -i`, a redirect, a heredoc or an inline `node`/`python` script counts as an edit for the
+ * repeat-test bookkeeping — the agent can change a repo file without ever calling `edit`/`write`.
+ *
+ * Detected: `sed -i`, `tee <path>`, output redirection into a path (`>` / `>>`, which also covers
+ * `cat > file <<EOF` and `cat <<EOF > file`), `writeFileSync`/`appendFileSync`, `open(<path>, "w")`,
+ * and `python -c` scripts that write.
+ * Excluded: redirections whose target is under /dev, /proc or /tmp (throwaway probes, not repo
+ * files — v0.12's runs wrote short-lived scripts there), and a bare `printf`/`echo` to stdout.
+ */
+export function isBashEdit(command) {
+	const cmd = String(command ?? "");
+	if (!cmd) return false;
+	const isThrowaway = (p) => /^\s*\/(dev|proc|tmp)\b/.test(p);
+	// A redirection target: `> path`, `>> path`, `2> path`, `>| path`. The `(?<![=\-<])` lookbehind
+	// stops JavaScript/Python arrows (`=>`, `->`) and comparison (`<`) from reading as a redirect.
+	// `>&1`/`>&2` are fd dups (excluded by the `[^&|]` target).
+	const redirected = [...cmd.matchAll(/(?<![=\-<])[0-9]?>>?\|?\s*([^&|\s;]+)/g)].map((m) => m[1]).filter((p) => !isThrowaway(p));
+	if (redirected.length) return true;
+	const teeTargets = [...cmd.matchAll(/\btee\b((?:\s+-[a-zA-Z]+)*)\s+([^|;&\s]+)/g)].map((m) => m[2]).filter((p) => !isThrowaway(p));
+	if (teeTargets.length) return true;
+	if (/\bsed\b[^|;&]*\s-i(\s|$|\b)/.test(cmd)) return true;
+	// perl -i / -pi edit a file in place, exactly like sed -i.
+	if (/\bperl\b[^|;&]*\s-[a-zA-Z0-9]*i[a-zA-Z0-9]*\s/.test(cmd)) return true;
+	if (/writeFileSync\s*\(|appendFileSync\s*\(/.test(cmd)) return true;
+	if (/open\s*\(\s*[^)]*,\s*["'`][wa]\+?["'`]/.test(cmd)) return true;
+	if (/\bpython[0-9.]*\b/.test(cmd) && /with\s+open\s*\(|\.write\s*\(|open\s*\([^)]*["'`]w/.test(cmd)) return true;
+	return false;
+}
+
 /** Everything the run changed relative to the base commit, including untracked files. */
 export function captureDiff(ws, baseSha) {
 	git(ws, ["add", "-A"]);

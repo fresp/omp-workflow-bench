@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { listTasks } from "./lib/config.mjs";
 import { listRunDirs, readJson, resolveLabel, RESULTS } from "./lib/results.mjs";
-import { parseToolCalls } from "./lib/run-common.mjs";
+import { isBashEdit, parseToolCalls } from "./lib/run-common.mjs";
 
 const { values: argv } = parseArgs({ options: { label: { type: "string" }, baseline: { type: "string" } } });
 const label = resolveLabel(argv.label);
@@ -396,13 +396,17 @@ function writeSection7() {
 	h("## 7. What execution spends its calls on (both arms)");
 	md.push("Tool categories from `rpc.ndjson` (`tool_execution_start` frames). Phases as in section 5. `read` = read; `search` = glob/grep; `edit/write` = edit/write; `test` = bash matching `npm test` / `node --test` / `readyset_verify`; `other bash`; `other tools` (eval, todo, ask, hub, task, web_search…). There is no `readyset_verify` tool in v0.12 — it is a forward-compatible name.");
 	md.push("");
+	md.push("A test call is a **repeat** when it re-runs the suite with no edit since the previous test — i.e. nothing changed between the two, so the second result cannot differ. An edit is an `edit`/`write` call **or** a bash command that writes a file (`sed -i`, `tee`, a `>`/`>>` redirect, `writeFileSync`, `open(path, \"w\")`) — the agent can change a repo file without calling `edit`/`write`. Redirections into `/dev`, `/proc` or `/tmp` are probes, not edits.");
 	for (const arm of ["plan", "readyset"]) {
 		const armRuns = runs.filter((r) => r.arm === arm);
 		if (!armRuns.length) continue;
-		const agg = { total: {}, applyReads: 0, applyTests: 0, applyEdits: 0, rereads: 0, applyReadFiles: new Set(), distinctRead: new Set(), distinctEdit: new Set(), testRuns: 0, testsWithoutEdit: 0, ctxPerCall: 0, calls: 0, otherByName: {}, taskPhases: {}, taskCalls: 0 };
-		let lastEdit = -1;
+		const agg = { total: {}, applyReads: 0, applyTests: 0, applyEdits: 0, rereads: 0, applyReadFiles: new Set(), distinctRead: new Set(), distinctEdit: new Set(), testRuns: 0, repeatTests: 0, ctxPerCall: 0, calls: 0, otherByName: {}, taskPhases: {}, taskCalls: 0 };
 		for (const r of armRuns) {
 			const calls = annotateCalls(r);
+			// Reset per run: `c.idx` restarts at 0 for each run, so a `lastEdit` carried over from the
+			// previous run would sit at its high final index and mis-classify this run's early tests.
+			let lastEdit = -1;
+			let lastTest = -1;
 			for (const c of calls) {
 				agg.total[c.category] = (agg.total[c.category] ?? 0) + 1;
 				if (c.category === "other tools") agg.otherByName[c.tool] = (agg.otherByName[c.tool] ?? 0) + 1;
@@ -411,8 +415,14 @@ function writeSection7() {
 					if (c.category === "read") agg.distinctRead.add(c.path);
 					if (c.category === "edit/write") agg.distinctEdit.add(c.path);
 				}
-				if (c.category === "test") { agg.testRuns++; if (c.idx > lastEdit) agg.testsWithoutEdit++; }
-				if (c.category === "edit/write") lastEdit = c.idx;
+				if (c.category === "test") {
+					agg.testRuns++;
+					// A repeat re-runs the suite with no edit in between: the last edit (if any) predates
+					// the previous test, so nothing changed since that test's result.
+					if (lastTest >= 0 && lastEdit < lastTest) agg.repeatTests++;
+					lastTest = c.idx;
+				}
+				if (c.isEdit) lastEdit = c.idx;
 				if (["apply", "review"].includes(c.phase) && c.category === "read" && c.path) {
 					agg.applyReadFiles.add(c.path);
 					if (c.seenBefore) agg.rereads++;
@@ -437,7 +447,7 @@ function writeSection7() {
 			md.push(`| **total** | **${cat("other tools")}** |`, "");
 		}
 		md.push(`- distinct files read: ${agg.distinctRead.size} · distinct files edited: ${agg.distinctEdit.size}`);
-		md.push(`- test runs: ${agg.testRuns} · test runs with no edit since the previous one (repeat): ${agg.testsWithoutEdit}`);
+		md.push(`- test runs: ${agg.testRuns} · repeats (no edit since the previous test): ${agg.repeatTests}`);
 		md.push(`- re-reads in Apply/Review of a file already read earlier in the run: ${agg.rereads} (${pct(agg.applyReads ? agg.rereads / agg.applyReads : null)} of Apply/Review reads; ${agg.applyReadFiles.size} distinct files)`);
 		md.push(`- avg context per call (input + cache read/write): ${agg.calls ? kfmt(agg.ctxPerCall / agg.calls) : "—"}`);
 		md.push("");
@@ -503,7 +513,11 @@ function annotateCalls(r) {
 		const path = c.args?.path ? normalizeWs(String(c.args.path), ws) : null;
 		const seenBefore = category === "read" && path ? seenPaths.has(path) : false;
 		if (category === "read" && path) seenPaths.add(path);
-		return { ...c, idx, category, path, phase: phaseOf.get(c.id) ?? "grill", seenBefore };
+		// A bash command can write a repo file without ever calling edit/write (sed -i, redirects,
+		// heredocs, inline node/python). It stays categorised "other bash" — it is not a repo edit
+		// tool — but the repeat-test bookkeeping treats it as an edit.
+		const isEdit = category === "edit/write" || (c.tool === "bash" && isBashEdit(c.args?.command));
+		return { ...c, idx, category, path, phase: phaseOf.get(c.id) ?? "grill", seenBefore, isEdit };
 	});
 }
 
