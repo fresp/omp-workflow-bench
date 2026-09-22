@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, tokenSummary, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
+import { answerAgentUi, cellExtensionRoot, cellMount, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, toSandboxPath, tokenSummary, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
 const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" }, arm: { type: "string", default: "readyset-fast" }, "dirty-workspace": { type: "boolean", default: false } } });
@@ -33,6 +33,10 @@ if (!stagedExtension) {
 	console.error(`failed to stage the readyset extension from ${cfg.omp.readysetExtension}`);
 	process.exit(2);
 }
+// The overlay, the staged extension and the session dir all live under the bench root, which the
+// sandbox does not mount — bind the cell at /run/cell and hand omp the in-sandbox paths. Host paths
+// stay in metrics/ompArgs (ompArgs is rewritten below so it shows what omp was actually run with).
+const cell = cellMount(cfg, paths.out);
 
 const metrics = {
 	arm,
@@ -47,6 +51,8 @@ const metrics = {
 	baseSha,
 	readysetExtension: cfg.omp.readysetExtension,
 	stagedExtension,
+	// The evidence needed to debug the next mount problem without re-deriving it from the argv.
+	sandboxMount: cell ? { host: cell.host, at: cell.sandbox } : null,
 	status: "running",
 	phase: "grill",
 	startedAt: nowIso(),
@@ -68,19 +74,19 @@ const event = (what, extra = {}) => metrics.events.push({ at: nowIso(), what, ..
 const args = [
 	"--mode", "rpc",
 	"--cwd", paths.ws,
-	"--config", overlay,
+	"--config", toSandboxPath(cell, overlay),
 	// Hermetic: the extension under test is the only one loaded. --no-skills matters: a `readyset`
 	// skill is also installed, and skills resolve before extension commands in RPC mode.
 	"--no-extensions",
-	"-e", stagedExtension,
+	"-e", toSandboxPath(cell, stagedExtension),
 	"--no-skills",
-	"--session-dir", join(paths.out, "session"),
+	"--session-dir", toSandboxPath(cell, join(paths.out, "session")),
 	"--model", models.planModel,
 	...cfg.omp.extraArgs,
 ];
 metrics.ompArgs = args;
 
-const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws, stagedExtension) });
+const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws, stagedExtension, cell) });
 const simUser = createSimUser({ task, cfg, logFile: join(paths.out, "sim-user.ndjson") });
 const uiState = { answeredTitles: new Set(), pendingText: null };
 const deadline = Date.now() + cfg.limits.runMinutes * 60_000;
@@ -276,7 +282,7 @@ copyIfExists(join(paths.ws, ".ai"), join(paths.out, "final", "ai"));
 const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
-metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")), cfg.omp.readysetExtension);
+metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")), cfg.omp.readysetExtension, cellExtensionRoot(cell));
 const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
 metrics.userEditsDetail = userEditVerdict?.detail ?? null;

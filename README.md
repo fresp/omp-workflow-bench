@@ -84,6 +84,9 @@ Both arms are driven over `omp --mode rpc` with:
 - `--no-skills`
 - a per-run `--config` overlay that turns memory, autolearn and advisor off, so no run learns from
   another. `~/.omp/agent/config.yml` is never edited.
+- a sandbox (`bwrap`): the agent sees only its workspace plus the cell's own output dir — the
+  overlay, the staged extension and the session dir — bound read-only at `/run/cell`. The bench
+  root, `tasks/`, other cells and other labels are not mounted.
 
 **`/plan` arm** runs `omp --plan-yolo --plan-yolo-into <model> --model <model>` with the request as
 the prompt:

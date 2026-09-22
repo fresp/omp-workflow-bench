@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, listMd, parseToolCalls, safeCaptureDiff, sandboxArgs, nowIso, prepareRun, runPaths, subtractTokens, tokenSummary, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
+import { answerAgentUi, cellExtensionRoot, cellMount, listMd, parseToolCalls, safeCaptureDiff, sandboxArgs, toSandboxPath, nowIso, prepareRun, runPaths, subtractTokens, tokenSummary, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
 const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" }, "dirty-workspace": { type: "boolean", default: false } } });
@@ -20,6 +20,10 @@ const task = loadTask(listTasks([argv.task])[0].dirName);
 const models = resolveArmModels("plan", argv.model);
 const paths = runPaths({ cfg, label: argv.label, task, arm: "plan", model: argv.model, rep: argv.rep });
 const { baseSha, overlay, userEdits, stagedExtension } = prepareRun(paths, task, { dirty: argv["dirty-workspace"], extPath: cfg.omp.readysetExtension });
+// The overlay (whose plan.autosaveDir points into the cell) and the session dir live under the
+// bench root, which the sandbox does not mount — bind the cell at /run/cell and hand omp the
+// in-sandbox paths. The autosave write lands in the same host dir either way.
+const cell = cellMount(cfg, paths.out);
 
 const metrics = {
 	arm: "plan",
@@ -33,6 +37,8 @@ const metrics = {
 	baseSha,
 	readysetExtension: cfg.omp.readysetExtension,
 	stagedExtension,
+	// The evidence needed to debug the next mount problem without re-deriving it from the argv.
+	sandboxMount: cell ? { host: cell.host, at: cell.sandbox } : null,
 	status: "running",
 	startedAt: nowIso(),
 	prepAt: null,
@@ -48,10 +54,10 @@ const event = (what, extra = {}) => metrics.events.push({ at: nowIso(), what, ..
 const args = [
 	"--mode", "rpc",
 	"--cwd", paths.ws,
-	"--config", overlay,
+	"--config", toSandboxPath(cell, overlay),
 	"--no-extensions",
 	"--no-skills",
-	"--session-dir", join(paths.out, "session"),
+	"--session-dir", toSandboxPath(cell, join(paths.out, "session")),
 	"--model", models.planModel,
 	"--plan-yolo",
 	"--plan-yolo-into", models.execModel,
@@ -59,7 +65,7 @@ const args = [
 ];
 metrics.ompArgs = args;
 
-const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws, stagedExtension) });
+const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws, stagedExtension, cell) });
 const simUser = createSimUser({ task, cfg, logFile: join(paths.out, "sim-user.ndjson") });
 const uiState = { answeredTitles: new Set(), pendingText: null };
 const deadline = Date.now() + cfg.limits.runMinutes * 60_000;
@@ -152,7 +158,7 @@ await rpc.close();
 const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
-metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")), cfg.omp.readysetExtension);
+metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")), cfg.omp.readysetExtension, cellExtensionRoot(cell));
 const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
 metrics.userEditsDetail = userEditVerdict?.detail ?? null;

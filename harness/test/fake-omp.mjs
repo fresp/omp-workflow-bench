@@ -2,7 +2,7 @@
 // Offline stand-in for `omp --mode rpc`, just rich enough to drive both arm scripts end to end.
 // Emulates: ready frame, prompts, get_state / get_session_stats / get_last_assistant_text /
 // get_messages, ask-tool selects (plan arm), readyset's pickers and review gate (readyset arm).
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -11,6 +11,16 @@ const opt = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : unde
 const cwd = opt("--cwd");
 const isPlan = argv.includes("--plan-yolo");
 const overlay = opt("--config");
+// Same shape as the real omp: the paths the harness promised must be readable *inside* the sandbox.
+// When they are not, the double dies exactly as omp did in qc-1 ("Config overlay not found"), and
+// the smoke's `set -euo pipefail` turns that into a failed smoke instead of a silent pass.
+const ext = (() => {
+	const i = argv.indexOf("-e");
+	return i === -1 ? argv.find((a) => a.endsWith("/ext/src/extensions/readyset-review.ts")) ?? null : argv[i + 1];
+})();
+if (overlay && !existsSync(overlay)) throw new Error(`fake-omp: --config overlay missing: ${overlay}`);
+if (ext && !existsSync(ext)) throw new Error(`fake-omp: -e extension missing: ${ext}`);
+if (ext) readFileSync(ext);
 const autosaveDir = overlay ? JSON.parse(/autosaveDir: (.*)/.exec(readFileSync(overlay, "utf8"))[1]) : null;
 
 let streaming = false;

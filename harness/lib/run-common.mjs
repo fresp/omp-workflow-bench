@@ -138,25 +138,70 @@ export function assertCleanWorkspace(ws) {
 }
 
 /**
+ * The current cell's output dir, bound into the sandbox at a neutral path.
+ *
+ * Why: the arm drivers pass omp `--config <cell>/omp-overlay.yml`, `-e <cell>/ext/src/…` and
+ * `--session-dir <cell>/session` — all under the bench root, which the sandbox deliberately does
+ * not mount. qc-1's omp therefore died at startup with
+ * `Config overlay not found: …/results/qc-1/…/omp-overlay.yml` (see that run's omp-stderr.txt),
+ * never printed a `ready` frame and left an empty rpc.ndjson. Binding the *cell* — and nothing
+ * else under the bench root — at a neutral in-sandbox path fixes that without exposing `tasks/`,
+ * other cells or other labels.
+ */
+export const CELL_SANDBOX_ROOT = "/run/cell";
+/**
+ * @returns {{host:string, sandbox:string}|null} null when no sandbox is in play.
+ */
+export const cellMount = (cfg, out) => (useSandbox(cfg) ? { host: resolve(out), sandbox: CELL_SANDBOX_ROOT } : null);
+
+/** The in-sandbox extension root for a cell mount (`<staged>/src/…` sits under this). */
+export const cellExtensionRoot = (cell) => (cell ? join(cell.sandbox, "ext") : null);
+
+/** Absolute `host` → its in-sandbox path under the cell mount, or unchanged when `host` is outside it. */
+export function toSandboxPath(mount, host) {
+	if (!mount) return host;
+	const h = resolve(host);
+	return h === mount.host || h.startsWith(`${mount.host}/`) ? join(mount.sandbox, h.slice(mount.host.length)) : h;
+}
+
+/**
+ * Is a sandbox in effect for this config? `BENCH_BWRAP_BIN` is a smoke-only override in the spirit
+ * of BENCH_OMP_BIN/BENCH_WORK_DIR; production leaves it unset and gets /usr/bin/bwrap. Set, it also
+ * disables the .mjs test-double escape hatch below: the offline smoke's fake omp then runs through
+ * a bwrap-shaped argv (its shim), which is the only offline way to exercise the mount assembly and
+ * the arg rewriting.
+ */
+function useSandbox(cfg) {
+	if (cfg.omp?.sandbox === false) return false;
+	const bwrapBin = process.env.BENCH_BWRAP_BIN ?? "/usr/bin/bwrap";
+	if (!existsSync(bwrapBin)) return false;
+	// A test double (BENCH_OMP_BIN → a .mjs/.js script) is not an executable bwrap can `execvp`.
+	// Only when bwrap is the real thing: with BENCH_BWRAP_BIN set (the offline smoke's shim, which
+	// execs its argv without confinement) the double *is* what we want to run through the wrapper.
+	return process.env.BENCH_BWRAP_BIN ? true : !/\.(mjs|js|cjs)$/.test(resolveOmpBin(cfg.omp?.bin ?? "omp"));
+}
+
+/**
  * A `bwrap` argv prefix that confines the agent to its workspace. Absolute paths anywhere else on
  * the host are unmounted, so `find / -name readyset*` cannot reach the bench, the extension's
- * source, ~/Downloads or the session logs. `argv[0]` is the bwrap binary itself, so the result can
- * be handed straight to `OmpRpc`'s `wrap`. Returns [] when disabled or bwrap is missing, in which
- * case the preflight assertion + the sim-user rule + escape logging are the (weaker) fallback.
+ * source, ~/Downloads or the session logs.
+ *
+ * The cell's output dir (overlay, staged extension, session dir) is the *only* thing under the
+ * bench root the sandbox can see, bound read-only at `/run/cell`; the bench root, `tasks/`, every
+ * other cell and every other label are not mounted. The drivers rewrite the paths they hand to omp
+ * accordingly (see `toSandboxPath`).
  *
  * When `stagedExtension` is given, only its staged root (`<staged>/src/…`) is bound, so the sandbox
  * never exposes the extension's full source repo. Without it (e.g. preflight, which probes before
  * any run) the real extension root is bound, as before.
+ *
+ * `argv[0]` is the (possibly BENCH_BWRAP_BIN-overridden) bwrap binary itself, so the result can be
+ * handed straight to `OmpRpc`'s `wrap`. Returns [] when disabled or bwrap is missing, in which case
+ * the preflight assertion + the sim-user rule + escape logging are the (weaker) fallback.
  */
-export function sandboxArgs(cfg, ws, stagedExtension = null) {
-	if (cfg.omp?.sandbox === false) return [];
-	const bin = "/usr/bin/bwrap";
-	if (!existsSync(bin)) return [];
-	// The sandbox confines the *agent*. A test double (BENCH_OMP_BIN → a .mjs/.js script, e.g. the
-	// offline smoke's fake-omp) is not an executable bwrap can `execvp`, and it may live inside a
-	// tree the sandbox deliberately hides. Leave it unconfined: it makes no real model calls.
-	const ompBin = resolveOmpBin(cfg.omp?.bin ?? "omp");
-	if (/\.(mjs|js|cjs)$/.test(ompBin)) return [];
+export function sandboxArgs(cfg, ws, stagedExtension = null, cell = null) {
+	if (!useSandbox(cfg)) return [];
+	const bin = process.env.BENCH_BWRAP_BIN ?? "/usr/bin/bwrap";
 	const home = homedir();
 	const mount = (p) => (existsSync(p) ? ["--ro-bind", p, p] : []);
 	const mountRw = (p) => (existsSync(p) ? ["--bind", p, p] : []);
@@ -190,10 +235,17 @@ export function sandboxArgs(cfg, ws, stagedExtension = null) {
 		...mountRw(home + "/.omp"),
 		...(extMountRoot ? mount(extMountRoot) : []),
 		...(ompRoot ? mount(ompRoot) : []),
+		// The current cell's output dir, and only that, of the bench root.
+		...(cell ? ["--ro-bind", cell.host, cell.sandbox] : []),
 		"--dev",
 		"/dev",
 		"--proc",
 		"/proc",
+		// A *read-only* /tmp (the previous `mount("/tmp")`) made every scratch write fail — observed
+		// while reproducing: `bwrap … /bin/sh -c 'echo x > /tmp/y'` → `Read-only file system` — and a
+		// read-only bind of the whole host tmpfs is exactly the wrong thing for a confinement whose
+		// job is to hide other runs. The workspace is mounted by its own explicit bind, so an empty
+		// writable /tmp is enough.
 		"--tmpfs",
 		"/tmp",
 		"--bind",
@@ -249,13 +301,18 @@ export function parseToolCalls(file) {
  * When `extPath` is given, an escape whose cleaned target is inside the extension's source tree is
  * tagged `category: "extension-src"` (the extension's own files are readable from the workspace's
  * host side unless the sandbox mounts a copy); every other escape is `category: "other"`.
+ *
+ * Under the cell mount the agent sees the *staged* copy at `/run/cell/ext/src/extensions/<name>.ts`,
+ * while the drivers still pass the real extension path — so `extMountRoot` (the in-sandbox staged
+ * root, `cellExtensionRoot(cell)`) counts as extension-src too. A tool call naming anything else
+ * under `/run/cell` (the overlay, the session dir) is a genuine escape attempt and stays `"other"`.
  */
-export function workspaceEscapes(ws, toolCalls, extPath = null) {
+export function workspaceEscapes(ws, toolCalls, extPath = null, extMountRoot = null) {
 	const abs = /(?<![\w.-])\/(?:[\w.-]+\/)*[\w.-]+/g;
 	const ignored = [/^\/dev\b/, /^\/proc\b/, /^\/usr\b/, /^\/bin\b/, /^\/lib\b/, /^\/lib64\b/, /^\/etc\b/, /^\/tmp\b/, /^\/session\b/];
 	const inWs = (p) => p === ws || p.startsWith(`${ws}/`);
 	const root = extPath && isAbsolute(extPath) ? extensionRoot(extPath) : null;
-	const inExt = (p) => root != null && (p === root || p.startsWith(`${root}/`));
+	const inExt = (p) => (root != null && (p === root || p.startsWith(`${root}/`))) || (extMountRoot != null && (p === extMountRoot || p.startsWith(`${extMountRoot}/`)));
 	const out = [];
 	for (const call of toolCalls ?? []) {
 		const name = call.tool;
