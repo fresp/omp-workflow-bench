@@ -13,6 +13,7 @@ import { listTasks } from "./lib/config.mjs";
 import { listRunDirs, readJson, readText, resolveLabel, RESULTS, walk } from "./lib/results.mjs";
 import { runTestDir } from "./lib/tests.mjs";
 import { git, makeWorkspace } from "./lib/workspace.mjs";
+import { canonicalTokens } from "./lib/tokens.mjs";
 
 const { values: argv } = parseArgs({ options: { label: { type: "string" }, force: { type: "boolean", default: false } } });
 const label = resolveLabel(argv.label);
@@ -36,6 +37,9 @@ for (const run of listRunDirs(label)) {
 
 	// ---------- planning document (the "persiapan execution" output) ----------
 	const plan = planningDocument(run, metrics);
+
+	// ---------- tokens: canonical definition from the raw log ----------
+	const canonical = canonicalTokens(join(run.dir, "rpc.ndjson"));
 
 	// ---------- diff: code vs workflow artefacts ----------
 	const fullDiff = readText(join(run.dir, "final", "changes.diff"));
@@ -150,12 +154,17 @@ for (const run of listRunDirs(label)) {
 		wallMs: metrics.wallMs,
 		prepMs: metrics.prepMs,
 		execMs: metrics.execMs,
+		// Canonical token accounting (see README → Methodology): the deduplicated assistant-message
+		// total from rpc.ndjson, not omp's get_session_stats client counter, which resets at
+		// compaction. tokensClientTotal keeps the old value for scripts/check-tokens.mjs.
 		tokensPrep: metrics.tokens?.prep?.total ?? null,
 		tokensExec: metrics.tokens?.exec?.total ?? null,
-		tokensTotal: metrics.tokens?.total?.total ?? null,
-		tokensInput: metrics.tokens?.total?.input ?? null,
-		tokensCacheRead: metrics.tokens?.total?.cacheRead ?? null,
-		tokensOutput: metrics.tokens?.total?.output ?? null,
+		tokensTotal: canonical?.total ?? null,
+		tokensInput: canonical?.input ?? null,
+		tokensCacheRead: canonical?.cacheRead ?? null,
+		tokensOutput: canonical?.output ?? null,
+		tokensCacheWrite: canonical?.cacheWrite ?? null,
+		tokensClientTotal: metrics.tokens?.total?.total ?? null,
 		cost: metrics.tokens?.total?.cost ?? null,
 		toolCalls: metrics.tokens?.total?.toolCalls ?? null,
 		routedModels: metrics.routedModels,
@@ -277,7 +286,8 @@ function bundle(task, c, plan, codeDiff, hidden) {
 | sim-user answers / nudges | ${c.simUserAnswers} / ${c.nudges} |
 | workspace escapes (advisory) | ${c.workspaceEscapes ? `${c.workspaceEscapes} — ${c.workspaceEscapePaths.join(", ")}` : "0"} |
 | wall time (prep / exec) | ${fmtMs(c.wallMs)} (${fmtMs(c.prepMs)} / ${fmtMs(c.execMs)}) |
-| tokens (prep / exec / total) | ${c.tokensPrep ?? "?"} / ${c.tokensExec ?? "?"} / ${c.tokensTotal ?? "?"} |
+| tokens (prep / exec) | ${c.tokensPrep ?? "?"} / ${c.tokensExec ?? "?"} |
+| tokens total (canonical) | ${c.tokensTotal ?? "?"} — input ${c.tokensInput ?? "?"} + cache read ${c.tokensCacheRead ?? "?"} + output ${c.tokensOutput ?? "?"}${c.tokensClientTotal != null ? ` (omp client total ${c.tokensClientTotal})` : ""} |
 | model drift | ${c.modelDrift?.join(", ") ?? "—"} |
 
 ## Request
@@ -307,7 +317,7 @@ function fmtMs(ms) {
 }
 
 function writeCsv(file, rows) {
-	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "workspaceEscapes", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
+	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "workspaceEscapes", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensClientTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
 	const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 	writeFileSync(file, `${cols.join(",")}\n${rows.map((r) => cols.map((c) => esc(r[c])).join(",")).join("\n")}\n`);
 }

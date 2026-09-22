@@ -207,11 +207,19 @@ export function captureDiff(ws, baseSha) {
 	return { full, stat, status };
 }
 
+/**
+ * omp's `get_session_stats` token totals, reshaped for metrics.json. NOTE: `total` here is the
+ * compaction-sensitive CLIENT counter — it resets when the context is compacted mid-run, so it
+ * undercounts long runs, and `subtractTokens(final, prep)` can go negative when prep was measured
+ * before a compaction and final after it. Do NOT report this number; compile.mjs derives the
+ * canonical total from the raw rpc log instead (harness/lib/tokens.mjs).
+ */
 export function tokenSummary(stats) {
 	if (!stats) return null;
 	return { ...stats.tokens, cost: stats.cost ?? 0, toolCalls: stats.toolCalls, assistantMessages: stats.assistantMessages, userMessages: stats.userMessages };
 }
 
+/** Element-wise `a - b` over a token summary; see tokenSummary's caveat about the client counter. */
 export function subtractTokens(a, b) {
 	if (!a) return null;
 	if (!b) return a;

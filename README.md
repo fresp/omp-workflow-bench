@@ -146,6 +146,20 @@ to `limits.maxNudges`. Nudges are counted and reported.
 - **grading is rebuilt from `final/changes.diff`** on a fresh copy of the fixture, never from the
   live workspace (which can be cleaned or clobbered)
 
+**Token accounting (one canonical definition).** A run's token cost is the sum, over
+**deduplicated assistant messages**, of `usage.input + usage.cacheRead + usage.cacheWrite +
+usage.output` (i.e. `usage.totalTokens`), taken from `rpc.ndjson`. `cacheWrite` is included — it is a
+real billable prefill on providers that report it (it is always `0` here). Compaction summaries that
+omp emits as `role: "compactionSummary"` are **not** assistant messages and are excluded; the tokens
+spent *producing* the summary are counted, because they appear as assistant messages.
+`message_start`, `message_end` and `turn_end` repeat the same usage object, so frames are
+deduplicated by `message.responseId` (else a hash of timestamp + usage) — otherwise the total
+triples. omp's `get_session_stats` client totals are recorded (`tokensClientTotal`) but **not used
+for reporting**: that counter resets when the context is compacted mid-run, so it undercounts long
+runs and `subtractTokens(final, prep)` can go negative for exec. `scripts/check-tokens.mjs` compares
+the two per run and warns when they differ by more than 2% (`--strict` to fail). For a run that
+never compacts (`/plan`) they agree exactly.
+
 **Judged, from `bench.sh`.** Pairwise and blind, run separately on two things:
 - **plan**: the preparation documents, normalized so tool vocabulary like "readyset", change-dir
   paths and "plan mode" is removed
