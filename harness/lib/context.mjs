@@ -141,6 +141,13 @@ export function mechanismMetrics(runDir) {
 	const contractWarnings = events.filter((e) => /requested doc missing from contract/i.test(String(e.outcome ?? e.message ?? ""))).length;
 	const contractRepair = events.findLast?.((e) => String(e.phase).toLowerCase() === "contract-repair" && e.edge === "end")?.outcome ?? null;
 
+	// readyset's own accounting of paths it saw outside the repo, on the gate `end` event
+	// (readyset ≥ F14). Pre-F14 runs write no such field → null, rendered "—".
+	const gateEnd = events.findLast?.((e) => String(e.phase).toLowerCase() === "gate" && e.edge === "end") ?? null;
+	const numOrNull = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+	const outsideRepo = numOrNull(gateEnd?.outsideRepo);
+	const outsideRepoTmp = numOrNull(gateEnd?.outsideRepoTmp);
+
 	// F6: scope reconciliation counts.
 	const scopeEvents = events.filter((e) => String(e.phase).toLowerCase() === "scope-reconcile");
 	const scopeReconcile = {
@@ -165,6 +172,8 @@ export function mechanismMetrics(runDir) {
 		reviewFix,
 		contractWarnings,
 		contractRepair,
+		outsideRepo,
+		outsideRepoTmp,
 		scopeReconcile,
 		internalTerms,
 	};

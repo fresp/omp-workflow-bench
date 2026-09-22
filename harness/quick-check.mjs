@@ -123,6 +123,11 @@ if (mech.length) {
 	check("internal-terms hits (reported, no threshold)", true, `mean ${num2(mean(mech.map((r) => r.c.mechanisms.internalTerms)))}`);
 	check("open decisions reaching Apply (reported)", true, `mean ${num2(mean(mech.map((r) => r.c.mechanisms.openDecisions)))}`);
 }
+// 9b. readyset's own outside-repo gate count (informational, only for runs ≥ F14 that report it).
+const outside = cur.filter((r) => typeof r.c.mechanisms?.outsideRepo === "number");
+if (outside.length) {
+	check("outside-repo hits at the gate (reported, no threshold)", true, `mean ${num2(mean(outside.map((r) => r.c.mechanisms.outsideRepo)))} over ${outside.length} run(s)`);
+}
 
 // 10. T11: the review-fix turn ran, or there were no blocking findings.
 const t11 = cur.filter((r) => r.taskDir.startsWith("T11") && r.c.arm === "readyset");

@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync,
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { ROOT, modelSlug } from "./config.mjs";
+import { stageExtension } from "./ext-stage.mjs";
 import { git, makeWorkspace } from "./workspace.mjs";
 
 export function runPaths({ cfg, label, task, arm, model, rep }) {
@@ -13,13 +14,17 @@ export function runPaths({ cfg, label, task, arm, model, rep }) {
 	return { cell, out, ws };
 }
 
-export function prepareRun(paths, task, { dirty = false } = {}) {
+export function prepareRun(paths, task, { dirty = false, extPath = null } = {}) {
 	rmSync(paths.out, { recursive: true, force: true });
 	mkdirSync(join(paths.out, "prep"), { recursive: true });
 	mkdirSync(join(paths.out, "final"), { recursive: true });
 	mkdirSync(join(paths.out, "session"), { recursive: true });
 	const baseSha = makeWorkspace(task.fixtureDir, paths.ws);
 	assertCleanWorkspace(paths.ws);
+	// Stage a minimal, neutral-named copy of the extension into the run output dir. The output dir is
+	// not mounted into the sandbox, so the source repo stays invisible under a name without "readyset";
+	// the arm drivers pass the staged entry to `-e` and sandboxArgs binds the staged root.
+	const stagedExtension = extPath ? stageExtension(extPath, join(paths.out, "ext")) : null;
 	// F1: pre-dirty the workspace like a user mid-edit, before the base commit is captured by the
 	// driver's diff. (The base commit already exists; the dirty files show up as uncommitted changes,
 	// which is exactly what a real working tree looks like.)
@@ -43,7 +48,7 @@ export function prepareRun(paths, task, { dirty = false } = {}) {
 			"",
 		].join("\n"),
 	);
-	return { baseSha, overlay, userEdits };
+	return { baseSha, overlay, userEdits, stagedExtension };
 }
 
 export function copyIfExists(from, to) {
@@ -138,8 +143,12 @@ export function assertCleanWorkspace(ws) {
  * source, ~/Downloads or the session logs. `argv[0]` is the bwrap binary itself, so the result can
  * be handed straight to `OmpRpc`'s `wrap`. Returns [] when disabled or bwrap is missing, in which
  * case the preflight assertion + the sim-user rule + escape logging are the (weaker) fallback.
+ *
+ * When `stagedExtension` is given, only its staged root (`<staged>/src/…`) is bound, so the sandbox
+ * never exposes the extension's full source repo. Without it (e.g. preflight, which probes before
+ * any run) the real extension root is bound, as before.
  */
-export function sandboxArgs(cfg, ws) {
+export function sandboxArgs(cfg, ws, stagedExtension = null) {
 	if (cfg.omp?.sandbox === false) return [];
 	const bin = "/usr/bin/bwrap";
 	if (!existsSync(bin)) return [];
@@ -158,6 +167,13 @@ export function sandboxArgs(cfg, ws) {
 			return null;
 		}
 	})();
+	// The extension root the sandbox may see: the staged copy's root when staging is in effect, else
+	// the real extension repo (preflight probe).
+	const extMountRoot = stagedExtension
+		? dirname(dirname(dirname(stagedExtension)))
+		: cfg.omp?.readysetExtension
+			? extensionRoot(cfg.omp.readysetExtension)
+			: null;
 	const args = [
 		bin,
 		...mount("/usr"),
@@ -172,7 +188,7 @@ export function sandboxArgs(cfg, ws) {
 		// must be a writable bind, not read-only. The run's own session dir is redirected elsewhere
 		// (--session-dir into the run output), so no other run's transcript is exposed.
 		...mountRw(home + "/.omp"),
-		...mount(cfg.omp?.readysetExtension ? extensionRoot(cfg.omp.readysetExtension) : ""),
+		...(extMountRoot ? mount(extMountRoot) : []),
 		...(ompRoot ? mount(ompRoot) : []),
 		"--dev",
 		"/dev",
@@ -229,11 +245,17 @@ export function parseToolCalls(file) {
  * Absolute paths a run named outside its workspace, via tool arguments or a bash command. The
  * sandbox is the enforcement; this is the tripwire that proves it held (and catches a sandbox that
  * was disabled). Each arm driver writes the result to metrics.workspaceEscapes.
+ *
+ * When `extPath` is given, an escape whose cleaned target is inside the extension's source tree is
+ * tagged `category: "extension-src"` (the extension's own files are readable from the workspace's
+ * host side unless the sandbox mounts a copy); every other escape is `category: "other"`.
  */
-export function workspaceEscapes(ws, toolCalls) {
+export function workspaceEscapes(ws, toolCalls, extPath = null) {
 	const abs = /(?<![\w.-])\/(?:[\w.-]+\/)*[\w.-]+/g;
 	const ignored = [/^\/dev\b/, /^\/proc\b/, /^\/usr\b/, /^\/bin\b/, /^\/lib\b/, /^\/lib64\b/, /^\/etc\b/, /^\/tmp\b/, /^\/session\b/];
 	const inWs = (p) => p === ws || p.startsWith(`${ws}/`);
+	const root = extPath && isAbsolute(extPath) ? extensionRoot(extPath) : null;
+	const inExt = (p) => root != null && (p === root || p.startsWith(`${root}/`));
 	const out = [];
 	for (const call of toolCalls ?? []) {
 		const name = call.tool;
@@ -248,7 +270,7 @@ export function workspaceEscapes(ws, toolCalls) {
 			const clean = p.replace(/\/+$/, "");
 			if (!clean.startsWith("/")) continue;
 			if (inWs(clean) || ignored.some((re) => re.test(clean))) continue;
-			out.push({ tool: name, target: clean });
+			out.push({ tool: name, target: clean, category: inExt(clean) ? "extension-src" : "other" });
 		}
 	}
 	return out;

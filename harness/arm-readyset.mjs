@@ -23,10 +23,14 @@ const models = resolveArmModels("readyset", argv.model);
 const arm = argv.arm;
 const lane = arm === "readyset" ? "fast" : arm.replace(/^readyset-/, "");
 const paths = runPaths({ cfg, label: argv.label, task, arm, model: argv.model, rep: argv.rep });
-const { baseSha, overlay, userEdits } = prepareRun(paths, task, { dirty: argv["dirty-workspace"] });
+const { baseSha, overlay, userEdits, stagedExtension } = prepareRun(paths, task, { dirty: argv["dirty-workspace"], extPath: cfg.omp.readysetExtension });
 
 if (!cfg.omp.readysetExtension || !existsSync(cfg.omp.readysetExtension)) {
 	console.error(`readyset extension not found: ${cfg.omp.readysetExtension} (bench.config.json → omp.readysetExtension)`);
+	process.exit(2);
+}
+if (!stagedExtension) {
+	console.error(`failed to stage the readyset extension from ${cfg.omp.readysetExtension}`);
 	process.exit(2);
 }
 
@@ -41,6 +45,8 @@ const metrics = {
 	rep: Number(argv.rep),
 	workspace: paths.ws,
 	baseSha,
+	readysetExtension: cfg.omp.readysetExtension,
+	stagedExtension,
 	status: "running",
 	phase: "grill",
 	startedAt: nowIso(),
@@ -66,7 +72,7 @@ const args = [
 	// Hermetic: the extension under test is the only one loaded. --no-skills matters: a `readyset`
 	// skill is also installed, and skills resolve before extension commands in RPC mode.
 	"--no-extensions",
-	"-e", cfg.omp.readysetExtension,
+	"-e", stagedExtension,
 	"--no-skills",
 	"--session-dir", join(paths.out, "session"),
 	"--model", models.planModel,
@@ -74,7 +80,7 @@ const args = [
 ];
 metrics.ompArgs = args;
 
-const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws) });
+const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws, stagedExtension) });
 const simUser = createSimUser({ task, cfg, logFile: join(paths.out, "sim-user.ndjson") });
 const uiState = { answeredTitles: new Set(), pendingText: null };
 const deadline = Date.now() + cfg.limits.runMinutes * 60_000;
@@ -270,7 +276,7 @@ copyIfExists(join(paths.ws, ".ai"), join(paths.out, "final", "ai"));
 const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
-metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
+metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")), cfg.omp.readysetExtension);
 const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
 metrics.userEditsDetail = userEditVerdict?.detail ?? null;

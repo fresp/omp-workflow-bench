@@ -19,7 +19,7 @@ const cfg = loadConfig();
 const task = loadTask(listTasks([argv.task])[0].dirName);
 const models = resolveArmModels("plan", argv.model);
 const paths = runPaths({ cfg, label: argv.label, task, arm: "plan", model: argv.model, rep: argv.rep });
-const { baseSha, overlay, userEdits } = prepareRun(paths, task, { dirty: argv["dirty-workspace"] });
+const { baseSha, overlay, userEdits, stagedExtension } = prepareRun(paths, task, { dirty: argv["dirty-workspace"], extPath: cfg.omp.readysetExtension });
 
 const metrics = {
 	arm: "plan",
@@ -31,6 +31,8 @@ const metrics = {
 	rep: Number(argv.rep),
 	workspace: paths.ws,
 	baseSha,
+	readysetExtension: cfg.omp.readysetExtension,
+	stagedExtension,
 	status: "running",
 	startedAt: nowIso(),
 	prepAt: null,
@@ -57,7 +59,7 @@ const args = [
 ];
 metrics.ompArgs = args;
 
-const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws) });
+const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws, stagedExtension) });
 const simUser = createSimUser({ task, cfg, logFile: join(paths.out, "sim-user.ndjson") });
 const uiState = { answeredTitles: new Set(), pendingText: null };
 const deadline = Date.now() + cfg.limits.runMinutes * 60_000;
@@ -150,7 +152,7 @@ await rpc.close();
 const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
-metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
+metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")), cfg.omp.readysetExtension);
 const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
 metrics.userEditsDetail = userEditVerdict?.detail ?? null;

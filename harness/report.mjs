@@ -458,6 +458,12 @@ md.push("");
 			const withCheck = runs.filter((r) => r.userEditsPreserved != null);
 			row("user edits preserved (F1 dirty-workspace)", `${withCheck.filter((r) => r.userEditsPreserved).length}/${withCheck.length}`, withCheck.length);
 		}
+		// The same phenomenon measured from both sides: readyset's own gate accounting (run ≥ F14) and
+		// the bench's escape tripwire, split into extension-source and everything else.
+		row("outside-repo hits at the gate (readyset)", num2(numMean((r) => r.mechanisms.outsideRepo)), rs.length);
+		row("/tmp hits at the gate (readyset)", num2(numMean((r) => r.mechanisms.outsideRepoTmp)), rs.length);
+		row("escape tripwire hits, extension-src (bench)", num2(numMean((r) => r.workspaceEscapeByCategory?.["extension-src"])), rs.length);
+		row("escape tripwire hits, other (bench)", num2(numMean((r) => r.workspaceEscapeByCategory?.other)), rs.length);
 	} else {
 		md.push("_No mechanism data (readyset < 0.13 or no change dir). Fields render “—” for older runs._");
 	}

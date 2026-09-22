@@ -167,6 +167,14 @@ for (const run of listRunDirs(label)) {
 		resumes: metrics.resumes ?? 0,
 		workspaceEscapes: (metrics.workspaceEscapes ?? []).length,
 		workspaceEscapePaths: [...new Set((metrics.workspaceEscapes ?? []).map((e) => e.target))],
+		// Split of the escape tripwire by category: "extension-src" paths name the extension's own
+		// source tree; "other" is everything else. Older runs predate the field → both null.
+		workspaceEscapeByCategory: metrics.workspaceEscapes
+			? {
+					"extension-src": metrics.workspaceEscapes.filter((e) => e.category === "extension-src").length,
+					other: metrics.workspaceEscapes.filter((e) => e.category !== "extension-src").length,
+				}
+			: null,
 		gateWarnings: metrics.gateWarnings?.length ?? 0,
 		verificationSendbacks: metrics.verificationSendbacks ?? 0,
 		wallMs: metrics.wallMs,

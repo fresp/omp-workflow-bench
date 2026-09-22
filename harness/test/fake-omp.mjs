@@ -95,7 +95,7 @@ async function onPrompt(message) {
 					[
 						"# Change: rate-limiting",
 						marker({ phase: "gate", edge: "start", at: at(0), lane: "full", laneSource: "brainstorm" }),
-						marker({ phase: "gate", edge: "end", at: at(1), outcome: "approved" }),
+						marker({ phase: "gate", edge: "end", at: at(1), outcome: "approved", outsideRepo: 0, outsideRepoTmp: 0 }),
 						marker({ phase: "apply", edge: "start", at: at(1) }),
 						marker({ phase: "apply", edge: "end", at: at(4), outcome: "done", diff: { files: 1, added: 2, deleted: 0 } }),
 						marker({ phase: "contract-repair", edge: "end", at: at(5), outcome: "resolved" }),
