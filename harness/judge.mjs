@@ -157,12 +157,18 @@ async function lengthMatched(run, text) {
 	const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
 	const cache = join(run.dir, "judge", `plan__lengthmatched_summary__${hash}.json`);
 	const cached = readJson(cache);
-	if (cached && typeof cached.summary === "string") return cached.summary;
 	const prompt = `Summarise the following planning document to at most ${target} characters. Keep every concrete decision, file/function name, and verification step; drop prose, restatement and formatting. Output only the summary.\n\n<document>\n${text.slice(0, 90_000)}\n</document>`;
-	const summary = await complete({ backend: cfg.judge.backend, model: cfg.judge.lengthMatchModel ?? cfg.simUser.model, prompt, timeoutSeconds: cfg.judge.timeoutSeconds ?? 600, cfg });
-	const trimmed = String(summary).slice(0, target);
-	writeFileSync(cache, `${JSON.stringify({ docHash: hash, chars: trimmed.length, summary: trimmed }, null, 2)}\n`);
-	return trimmed;
+	try {
+		const summary = await complete({ backend: cfg.judge.backend, model: cfg.judge.lengthMatchModel ?? cfg.simUser.model, prompt, timeoutSeconds: cfg.judge.timeoutSeconds ?? 600, cfg });
+		const trimmed = String(summary).slice(0, target);
+		writeFileSync(cache, `${JSON.stringify({ docHash: hash, chars: trimmed.length, summary: trimmed }, null, 2)}\n`);
+		return trimmed;
+	} catch (e) {
+		// A summariser timeout must not kill the run: fall back to a hard truncation and keep
+		// judging. The cache stays empty so a later re-run retries the summary.
+		console.log(`summarise-fallback ${run.dir.split("/").slice(-2).join("/")} — ${String(e.message ?? e).slice(0, 120)}`);
+		return text.slice(0, target);
+	}
 }
 
 void readJson;
