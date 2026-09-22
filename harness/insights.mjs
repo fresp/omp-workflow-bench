@@ -284,14 +284,29 @@ writeFileSync(join(base, "improve.md"), `${md.join("\n")}\n`);
 console.log(`improvement digest → results/${label}/improve.md`);
 
 // ---------------------------------------------------------------- helpers -----------------------
-/** The change dir's CONTEXT.md, from the gate snapshot or the final tree. */
+/**
+ * The richest change dir's CONTEXT.md — prefer the final tree over the gate snapshot.
+ * The gate snapshot (`prep/readyset-change/`) is a prefix of the final file (qc-sanity2: 7 vs 19
+ * markers); phase boundaries must come from the file with the most `<!-- readyset-phase -->`
+ * markers, not from the first one that exists. (See phaseEvents() in harness/lib/context.mjs,
+ * which merges all CONTEXT.md files for the compile path.)
+ */
 function contextFile(runDir) {
 	const candidates = [];
 	const prep = join(runDir, "prep", "readyset-change");
 	if (existsSync(prep)) for (const id of readdirSync(prep)) candidates.push(join(prep, id, "CONTEXT.md"));
 	const fin = join(runDir, "final", "readyset", "changes");
 	if (existsSync(fin)) for (const id of readdirSync(fin)) candidates.push(join(fin, id, "CONTEXT.md"));
-	return candidates.find((f) => existsSync(f)) ?? null;
+	const existing = candidates.filter((f) => existsSync(f));
+	if (!existing.length) return null;
+	const count = (f) => {
+		try {
+			return (readFileSync(f, "utf8").match(/readyset-phase/g) ?? []).length;
+		} catch {
+			return 0;
+		}
+	};
+	return existing.sort((a, b) => count(b) - count(a))[0];
 }
 
 /**

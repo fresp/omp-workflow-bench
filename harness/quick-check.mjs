@@ -72,6 +72,9 @@ for (const t of qc.mustImprove ?? []) {
 //    run exists (a wave that only ran explicit arms). Comparing every arm at once fails any task
 //    run under both readyset-fast and readyset-full.
 for (const [t, lane] of Object.entries(qc.lanes ?? {})) {
+	// No run of this task in the label (qc-sanity2 ran only T03): skip like criteria 1 & 3 do
+	// with `continue`, so a wave label is not failed by tasks it never ran.
+	if (!curT.has(t)) continue;
 	const rs = curT.get(t)?.readyset ?? [];
 	const auto = rs.filter((r) => r.armRaw === "readyset-auto");
 	const used = auto.length ? auto : rs;

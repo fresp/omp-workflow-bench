@@ -22,7 +22,17 @@ export function changeDirs(runDir) {
 	return out;
 }
 
-/** The first change dir's CONTEXT.md, or null. */
+/** Every change dir's CONTEXT.md that exists, in changeDirs() order (gate snapshot first). */
+export function contextFiles(runDir) {
+	const out = [];
+	for (const d of changeDirs(runDir)) {
+		const f = join(d, "CONTEXT.md");
+		if (existsSync(f)) out.push(f);
+	}
+	return out;
+}
+
+/** The first change dir's CONTEXT.md, or null. Kept for callers that only need one file. */
 export function contextFile(runDir) {
 	for (const d of changeDirs(runDir)) {
 		const f = join(d, "CONTEXT.md");
@@ -31,21 +41,44 @@ export function contextFile(runDir) {
 	return null;
 }
 
-/** Every `<!-- readyset-phase -->` event in a CONTEXT.md, in file order. */
+/** Stable stringify for event dedup: key order must not matter, exact duplicates must collapse. */
+function stableKey(v) {
+	if (Array.isArray(v)) return `[${v.map(stableKey).join(",")}]`;
+	if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableKey(v[k])}`).join(",")}}`;
+	return JSON.stringify(v);
+}
+
+/**
+ * Every `<!-- readyset-phase -->` event across all CONTEXT.md files, in file order.
+ *
+ * The gate snapshot (`prep/readyset-change/`) is a prefix of the final tree
+ * (`final/readyset/changes/`): qc-sanity2's prep file holds 7 markers (grill → gate:start)
+ * while the final file holds those same 7 plus 12 more (gate:end, apply, review, …).
+ * Reading only the first file truncates phaseSummary/outcomeCounts/mechanisms at the gate.
+ * Exact duplicates (same JSON) collapse; near-duplicates (e.g. repeated apply starts with
+ * different timestamps) are preserved.
+ */
 export function phaseEvents(runDir) {
-	const f = contextFile(runDir);
-	if (!f) return [];
-	let text;
-	try {
-		text = readFileSync(f, "utf8");
-	} catch {
-		return [];
-	}
+	const seen = new Set();
 	const out = [];
-	for (const m of text.matchAll(/<!--\s*readyset-phase\s*-->\s*```json\s*([\s\S]*?)```/g)) {
+	for (const d of changeDirs(runDir)) {
+		const f = join(d, "CONTEXT.md");
+		if (!existsSync(f)) continue;
+		let text;
 		try {
-			out.push(JSON.parse(m[1]));
-		} catch {}
+			text = readFileSync(f, "utf8");
+		} catch {
+			continue;
+		}
+		for (const m of text.matchAll(/<!--\s*readyset-phase\s*-->\s*```json\s*([\s\S]*?)```/g)) {
+			try {
+				const ev = JSON.parse(m[1]);
+				const key = stableKey(ev);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				out.push(ev);
+			} catch {}
+		}
 	}
 	return out;
 }

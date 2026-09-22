@@ -44,6 +44,35 @@ test("explicit fast+full arms for one task still pass the lane check", () => {
 	}
 });
 
+test("wrong lane on the auto arm fails the lane check (negative control)", () => {
+	const label = "__qc-lanes-wrong";
+	const task = "T09-csv-quoting-bug";
+	try {
+		writeRun(label, task, "readyset-auto__m__r1", "full");
+		const md = runQc(label, { [task]: "fast" });
+		assert.ok(md.includes("**FAIL**"), md);
+		assert.ok(md.includes(`| ${task} lane = fast | **FAIL** |`), md);
+		assert.ok(md.includes("lanes: full (arms: readyset-auto)"), md);
+	} finally {
+		rmSync(join(ROOT, "results", label), { recursive: true, force: true });
+	}
+});
+
+test("a lane-listed task with no runs is skipped, not failed", () => {
+	const label = "__qc-lanes-absent";
+	const other = "T03-discount-rounding-bug";
+	try {
+		// Only T03 ran; the T09/T04 lane criteria must not appear as FAIL rows.
+		writeRun(label, other, "readyset-auto__m__r1", "fast");
+		const md = runQc(label, { [other]: "fast", "T09-csv-quoting-bug": "fast", "T04-rate-limiting": "full" });
+		assert.ok(md.includes(`| ${other} lane = fast | pass |`), md);
+		assert.ok(!md.includes("T09-csv-quoting-bug lane"), md);
+		assert.ok(!md.includes("T04-rate-limiting lane"), md);
+	} finally {
+		rmSync(join(ROOT, "results", label), { recursive: true, force: true });
+	}
+});
+
 test("readyset-auto is authoritative when both auto and an explicit arm ran", () => {
 	const label = "__qc-lanes-auto";
 	const task = "T04-rate-limiting";

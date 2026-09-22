@@ -323,8 +323,22 @@ export function workspaceEscapes(ws, toolCalls, extPath = null, extMountRoot = n
 				for (const m of cmd.matchAll(abs)) {
 					const prev = m.index > 0 ? cmd[m.index - 1] : "";
 					if (prev && /[()\[\]{}*%+-]/.test(prev)) continue;
+					// The second slash of `http://host/...` (or any `//`): the match is the URL's
+					// host/path, not a filesystem path. qc-sanity2's in-process HTTP verify script
+					// (`server.listen(0,"127.0.0.1")`, `fetch(http://127.0.0.1:…)`) produced 10 such hits.
+					if (prev === "/") continue;
 					const tok = m[0].replace(/[;,)]+$/, "");
 					if (/^\/\d+(\/|$)/.test(tok)) continue;
+					// Route strings (`post("/orders")`, `get("/products")`) are single-quoted URL
+					// paths, not filesystem escapes. Only flag a candidate whose top-level directory
+					// actually exists on the harness host (e.g. /var, /run); /orders, /products and
+					// /127.0.0.1 never do. Genuine escapes name real trees (/run/cell, /var/log/…).
+					const top = tok.split("/").slice(0, 2).join("/");
+					try {
+						if (!existsSync(top)) continue;
+					} catch {
+						continue;
+					}
 					candidates.push(tok);
 				}
 			}
