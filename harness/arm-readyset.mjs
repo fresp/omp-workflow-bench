@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, codePathsFromNumstat, copyIfExists, listMd, nowIso, prepareRun, runPaths, safeCaptureDiff, subtractTokens, tokenSummary } from "./lib/run-common.mjs";
+import { answerAgentUi, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, tokenSummary, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
 const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" } } });
@@ -69,7 +69,7 @@ const args = [
 ];
 metrics.ompArgs = args;
 
-const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt") });
+const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws) });
 const simUser = createSimUser({ task, cfg, logFile: join(paths.out, "sim-user.ndjson") });
 const uiState = { answeredTitles: new Set(), pendingText: null };
 const deadline = Date.now() + cfg.limits.runMinutes * 60_000;
@@ -186,7 +186,22 @@ async function main() {
 			return;
 		}
 
-		const text = (await rpc.lastAssistantText()) ?? "";
+		// The generic "read the last assistant message and let simUser decide whether it's a
+		// question" path only applies to Grill: per readyset-review.ts's startGrilling() doc
+		// comment, Grill's questions are ordinary chat turns with no UI frame, so this is the only
+		// way to see them. Pipeline (Explore/Propose/gate/Apply) asks everything through proper
+		// extension_ui_request frames (handled above in the "frame" listener via onReadysetUi /
+		// answerAgentUi) — so once we're past Grill, any *other* trailing assistant text is not a
+		// legitimate readyset question, just conversational chatter after a turn returned control
+		// (e.g. Propose not finishing). Answering it here used to let the model keep "helping"
+		// completely ungoverned, with no gate in the loop at all: g1-canary-0.12 T11 saw a Propose
+		// turn return without a proposal, a stray "Proceed with implementation?" get auto-answered
+		// by this path, and the model go on to fully implement and archive the change with the
+		// review gate never shown (status: gate-bypassed). Restricting this path to "grill" closes
+		// that hole — everything else in pipeline falls through to the nudge/resume path below,
+		// which re-sends the documented recovery (`/readyset --fast ...`, resuming the existing
+		// change) instead of trusting arbitrary trailing chat.
+		const text = metrics.phase === "grill" ? (await rpc.lastAssistantText()) ?? "" : "";
 		const canAnswer = simUser.answers < cfg.limits.maxSimUserAnswers;
 		const verdict = text && canAnswer ? await simUser.onAgentMessage(text) : { needsReply: false };
 		if (verdict.needsReply) {
@@ -236,6 +251,7 @@ copyIfExists(join(paths.ws, ".ai"), join(paths.out, "final", "ai"));
 const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
+metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
 
 // Gate bypass: product code changed although the review gate was never reached. readyset's promise
 // is "nothing executes without approval", so this is a violation regardless of whether the code is

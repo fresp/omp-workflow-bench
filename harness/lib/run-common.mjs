@@ -1,6 +1,7 @@
 // Shared plumbing for the two arm drivers.
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { ROOT, modelSlug } from "./config.mjs";
 import { git, makeWorkspace } from "./workspace.mjs";
 
@@ -17,6 +18,7 @@ export function prepareRun(paths, task) {
 	mkdirSync(join(paths.out, "final"), { recursive: true });
 	mkdirSync(join(paths.out, "session"), { recursive: true });
 	const baseSha = makeWorkspace(task.fixtureDir, paths.ws);
+	assertCleanWorkspace(paths.ws);
 	// Per-run overlay on top of ~/.omp/agent/config.yml — never edits the user's config. Memory and
 	// autolearn are off so no run can learn from a previous one; plan autosave is how the /plan arm's
 	// plan is captured at the moment it is approved.
@@ -44,6 +46,150 @@ export function copyIfExists(from, to) {
 	mkdirSync(join(to, ".."), { recursive: true });
 	cpSync(from, to, { recursive: true });
 	return true;
+}
+
+/**
+ * Task metadata must never live inside the workspace. v0.12 proved why: with an unconfined bash,
+ * a run could, and did, cat `tasks/T03-*` json files and read the hidden requirements (see
+ * results/v0.12/leak-check.md). prepareRun copies only the fixture, so anything matching these
+ * names under the workspace is a harness bug — fail loudly instead of benchmarking a lie.
+ */
+const FORBIDDEN_IN_WORKSPACE = ["task.json", "acceptance.md", "persona.md", "request.md", "hidden-tests", "reference"];
+
+export function assertCleanWorkspace(ws) {
+	const found = [];
+	const walkNames = (dir, rel) => {
+		for (const name of readdirSync(dir)) {
+			const r = rel ? `${rel}/${name}` : name;
+			if (FORBIDDEN_IN_WORKSPACE.includes(name)) found.push(r);
+			const abs = join(dir, name);
+			if (statSync(abs).isDirectory()) walkNames(abs, r);
+		}
+	};
+	if (existsSync(ws)) walkNames(ws, "");
+	if (found.length) throw new Error(`workspace is not clean — task metadata is reachable inside it: ${found.join(", ")} (under ${ws})`);
+}
+
+/**
+ * A `bwrap` argv prefix that confines the agent to its workspace. Absolute paths anywhere else on
+ * the host are unmounted, so `find / -name readyset*` cannot reach the bench, the extension's
+ * source, ~/Downloads or the session logs. `argv[0]` is the bwrap binary itself, so the result can
+ * be handed straight to `OmpRpc`'s `wrap`. Returns [] when disabled or bwrap is missing, in which
+ * case the preflight assertion + the sim-user rule + escape logging are the (weaker) fallback.
+ */
+export function sandboxArgs(cfg, ws) {
+	if (cfg.omp?.sandbox === false) return [];
+	const bin = "/usr/bin/bwrap";
+	if (!existsSync(bin)) return [];
+	// The sandbox confines the *agent*. A test double (BENCH_OMP_BIN → a .mjs/.js script, e.g. the
+	// offline smoke's fake-omp) is not an executable bwrap can `execvp`, and it may live inside a
+	// tree the sandbox deliberately hides. Leave it unconfined: it makes no real model calls.
+	const ompBin = resolveOmpBin(cfg.omp?.bin ?? "omp");
+	if (/\.(mjs|js|cjs)$/.test(ompBin)) return [];
+	const home = homedir();
+	const mount = (p) => (existsSync(p) ? ["--ro-bind", p, p] : []);
+	const mountRw = (p) => (existsSync(p) ? ["--bind", p, p] : []);
+	const ompRoot = (() => {
+		try {
+			return dirname(realpathSync(ompBin));
+		} catch {
+			return null;
+		}
+	})();
+	const args = [
+		bin,
+		...mount("/usr"),
+		...mount("/lib"),
+		...mount("/lib64"),
+		...mount("/bin"),
+		...mount("/etc"),
+		// The omp binary resolves into a global node_modules tree; mount that tree read-only.
+		...mount(home + "/node_modules"),
+		...mount(home + "/.bun"),
+		// omp opens ~/.omp/agent/*.db read-write (WAL) for the session/history store, so this tree
+		// must be a writable bind, not read-only. The run's own session dir is redirected elsewhere
+		// (--session-dir into the run output), so no other run's transcript is exposed.
+		...mountRw(home + "/.omp"),
+		...mount(cfg.omp?.readysetExtension ? extensionRoot(cfg.omp.readysetExtension) : ""),
+		...(ompRoot ? mount(ompRoot) : []),
+		"--dev",
+		"/dev",
+		"--proc",
+		"/proc",
+		"--tmpfs",
+		"/tmp",
+		"--bind",
+		ws,
+		ws,
+		"--chdir",
+		ws,
+		"--unshare-pid",
+	];
+	return args;
+}
+
+function resolveOmpBin(bin) {
+	if (bin.includes("/")) return bin;
+	// `which` without a dependency: walk PATH.
+	for (const dir of (process.env.PATH ?? "").split(":")) {
+		const p = join(dir, bin);
+		if (existsSync(p)) return p;
+	}
+	return bin;
+}
+
+/** The readyset-flow repo directory that holds the extension (`<repo>/src/extensions/x.ts` → `<repo>`). */
+function extensionRoot(ext) {
+	return resolve(dirname(ext), "..", "..");
+}
+
+/**
+ * Tool calls recorded in an rpc.ndjson, as `{tool, args}`. Used by the escape tripwire here and by
+ * insights.mjs's call-category section; one parser keeps both honest.
+ */
+export function parseToolCalls(file) {
+	if (!existsSync(file)) return [];
+	const out = [];
+	for (const line of readFileSync(file, "utf8").split("\n")) {
+		if (!line) continue;
+		let f;
+		try {
+			f = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (f.type === "tool_execution_start") out.push({ id: f.toolCallId, tool: f.toolName, args: f.args ?? {} });
+	}
+	return out;
+}
+
+/**
+ * Absolute paths a run named outside its workspace, via tool arguments or a bash command. The
+ * sandbox is the enforcement; this is the tripwire that proves it held (and catches a sandbox that
+ * was disabled). Each arm driver writes the result to metrics.workspaceEscapes.
+ */
+export function workspaceEscapes(ws, toolCalls) {
+	const abs = /(?<![\w.-])\/(?:[\w.-]+\/)*[\w.-]+/g;
+	const ignored = [/^\/dev\b/, /^\/proc\b/, /^\/usr\b/, /^\/bin\b/, /^\/lib\b/, /^\/lib64\b/, /^\/etc\b/, /^\/tmp\b/, /^\/session\b/];
+	const inWs = (p) => p === ws || p.startsWith(`${ws}/`);
+	const out = [];
+	for (const call of toolCalls ?? []) {
+		const name = call.tool;
+		const candidates = [];
+		if (name === "bash") {
+			if (typeof call.args?.command === "string") candidates.push(...(call.args.command.match(abs) ?? []).map((m) => m.replace(/[;,)]+$/, "")));
+		} else if (["read", "edit", "write", "grep", "glob"].includes(name)) {
+			const p = call.args?.path;
+			if (typeof p === "string" && isAbsolute(p)) candidates.push(p);
+		}
+		for (const p of candidates) {
+			const clean = p.replace(/\/+$/, "");
+			if (!clean.startsWith("/")) continue;
+			if (inWs(clean) || ignored.some((re) => re.test(clean))) continue;
+			out.push({ tool: name, target: clean });
+		}
+	}
+	return out;
 }
 
 export function listMd(dir) {

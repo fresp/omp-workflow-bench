@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, listMd, safeCaptureDiff, nowIso, prepareRun, runPaths, subtractTokens, tokenSummary } from "./lib/run-common.mjs";
+import { answerAgentUi, listMd, parseToolCalls, safeCaptureDiff, sandboxArgs, nowIso, prepareRun, runPaths, subtractTokens, tokenSummary, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
 const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" } } });
@@ -57,7 +57,7 @@ const args = [
 ];
 metrics.ompArgs = args;
 
-const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt") });
+const rpc = new OmpRpc({ bin: cfg.omp.bin, args, cwd: paths.ws, rawLog: join(paths.out, "rpc.ndjson"), stderrLog: join(paths.out, "omp-stderr.txt"), wrap: sandboxArgs(cfg, paths.ws) });
 const simUser = createSimUser({ task, cfg, logFile: join(paths.out, "sim-user.ndjson") });
 const uiState = { answeredTitles: new Set(), pendingText: null };
 const deadline = Date.now() + cfg.limits.runMinutes * 60_000;
@@ -150,6 +150,7 @@ await rpc.close();
 const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
+metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
 
 if (metrics.harnessError) metrics.status = "harness-error";
 metrics.finishedAt = nowIso();

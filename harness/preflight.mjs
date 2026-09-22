@@ -9,9 +9,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, loadModels, readOmpModelConfig, resolveArmModels, ROOT } from "./lib/config.mjs";
+import { loadConfig, loadModels, listTasks, readOmpModelConfig, resolveArmModels, ROOT } from "./lib/config.mjs";
 import { complete } from "./lib/llm.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
+import { prepareRun, sandboxArgs } from "./lib/run-common.mjs";
 
 const cfg = loadConfig();
 let problems = 0;
@@ -59,6 +60,27 @@ await probe("readyset extension registers /readyset", ["--mode", "rpc", "--cwd",
 	return /"readyset"/.test(names) || names.includes("/readyset");
 });
 rmSync(scratch, { recursive: true, force: true });
+
+console.log("\nworkspace isolation");
+{
+	// A workspace must contain the fixture only: no task metadata, no hidden tests, nothing that
+	// names the answer. v0.12's leak came from exactly this being reachable (see leak-check.md).
+	const scratch = mkdtempSync(join(tmpdir(), "rsb-clean-"));
+	const task = listTasks(["T03"])[0];
+	const paths = { ws: join(scratch, "repo"), out: join(scratch, "out") };
+	try {
+		prepareRun(paths, task);
+		ok(`workspace for ${task.id} is clean (no task.json / acceptance.md / hidden-tests / reference)`);
+	} catch (e) {
+		bad(`workspace isolation: ${e.message}`);
+	} finally {
+		rmSync(scratch, { recursive: true, force: true });
+	}
+	const sb = sandboxArgs(cfg, "/tmp/does-not-matter");
+	sb.length
+		? ok(`bwrap sandbox available (${sb.filter((x) => x === "--ro-bind").length} read-only mounts; no network unshare)`)
+		: console.log("  note  sandbox disabled or bwrap missing — falling back to the preflight assertion, the sim-user rule and escape logging");
+}
 
 console.log("\ntasks");
 console.log("  (runs every hidden suite twice — base and reference; ~30-60 s, T12 is a perf test)");

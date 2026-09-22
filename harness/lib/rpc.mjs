@@ -6,12 +6,16 @@ import { EventEmitter } from "node:events";
 
 export class OmpRpc extends EventEmitter {
 	/**
-	 * @param {{ bin: string, args: string[], cwd: string, rawLog: string, stderrLog: string, env?: object }} opts
+	 * @param {{ bin: string, args: string[], cwd: string, rawLog: string, stderrLog: string, env?: object, wrap?: string[] }} opts
+	 *   `wrap` is an argv prefix (e.g. bwrap flags) placed before the binary; the binary and its
+	 *   args are appended to it, so the agent runs confined with its own CLI arguments intact.
 	 */
-	constructor({ bin, args, cwd, rawLog, stderrLog, env }) {
+	constructor({ bin, args, cwd, rawLog, stderrLog, env, wrap = [] }) {
 		super();
 		this.args = args;
-		this.child = spawn(bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
+		const spawnBin = wrap[0] ?? bin;
+		const spawnArgs = [...wrap.slice(1), bin, ...args];
+		this.child = spawn(spawnBin, spawnArgs, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
 		this.raw = createWriteStream(rawLog, { flags: "a" });
 		this.err = createWriteStream(stderrLog, { flags: "a" });
 		this.lastFrameAt = Date.now();

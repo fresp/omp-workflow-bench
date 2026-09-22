@@ -143,6 +143,8 @@ for (const run of listRunDirs(label)) {
 		simUserAnswers: metrics.simUserAnswers,
 		nudges: metrics.nudges,
 		resumes: metrics.resumes ?? 0,
+		workspaceEscapes: (metrics.workspaceEscapes ?? []).length,
+		workspaceEscapePaths: [...new Set((metrics.workspaceEscapes ?? []).map((e) => e.target))],
 		gateWarnings: metrics.gateWarnings?.length ?? 0,
 		verificationSendbacks: metrics.verificationSendbacks ?? 0,
 		wallMs: metrics.wallMs,
@@ -273,6 +275,7 @@ function bundle(task, c, plan, codeDiff, hidden) {
 | harness error | ${c.harnessError ?? "—"} |
 | plan grounding | ${c.grounding.existing} existing + ${c.grounding.createdByRun} created / ${c.grounding.refs} refs; dangling: ${c.grounding.dangling.join(", ") || "—"} (refs are layout-normalized) |
 | sim-user answers / nudges | ${c.simUserAnswers} / ${c.nudges} |
+| workspace escapes (advisory) | ${c.workspaceEscapes ? `${c.workspaceEscapes} — ${c.workspaceEscapePaths.join(", ")}` : "0"} |
 | wall time (prep / exec) | ${fmtMs(c.wallMs)} (${fmtMs(c.prepMs)} / ${fmtMs(c.execMs)}) |
 | tokens (prep / exec / total) | ${c.tokensPrep ?? "?"} / ${c.tokensExec ?? "?"} / ${c.tokensTotal ?? "?"} |
 | model drift | ${c.modelDrift?.join(", ") ?? "—"} |
@@ -304,7 +307,7 @@ function fmtMs(ms) {
 }
 
 function writeCsv(file, rows) {
-	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
+	const cols = ["task", "category", "clarity", "arm", "model", "rep", "status", "hiddenPass", "hiddenTotal", "hiddenPassRate", "solved", "ownSuiteGreen", "filesChanged", "linesAdded", "linesDeleted", "testFilesChanged", "simUserAnswers", "nudges", "workspaceEscapes", "wallMs", "prepMs", "execMs", "tokensPrep", "tokensExec", "tokensTotal", "tokensInput", "tokensCacheRead", "tokensOutput", "cost", "planChars", "planSource", "harnessError"];
 	const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 	writeFileSync(file, `${cols.join(",")}\n${rows.map((r) => cols.map((c) => esc(r[c])).join(",")).join("\n")}\n`);
 }
