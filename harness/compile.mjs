@@ -230,9 +230,15 @@ function stripFrontmatter(text) {
 function normalizeForJudge(text) {
 	return text
 		.replace(/<!--[\s\S]*?-->/g, "")
+		// A top-level `## Grounding` section holds readyset-internal anchors; F7 moves them there.
+		.replace(/^##\s*Grounding\b[\s\S]*?(?=^##\s|\Z)/gim, "")
+		// Workflow-internal path surface, at any depth.
 		.replace(/readyset\/changes\/[\w.-]+\/?/gi, "<change-dir>/")
+		.replace(/(?:^|[\s(`'"\[])(?:\.\.\/)*(?:[\w.-]+\/)*readyset\/[\w./-]+/g, " <change-dir>/")
+		.replace(/(?:^|[\s(`'"\[])specs\/[\w./-]+/gm, " <notes>")
 		.replace(/\.ai\/brainstorms\/[\w./-]+/gi, "<requirements-doc>")
 		.replace(/\bEXPLORATION\.md\b|\bCONTEXT\.md\b|\bREVIEW\.md\b/g, "<notes>")
+		.replace(/\btasks\.md\b/gi, "<task-list>")
 		.replace(/\bready\s?set\b/gi, "the workflow")
 		.replace(/\bplan[- ]yolo\b/gi, "")
 		.replace(/\bplan mode\b/gi, "planning")

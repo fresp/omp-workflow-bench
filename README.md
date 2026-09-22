@@ -165,14 +165,31 @@ never compacts (`/plan`) they agree exactly.
   paths and "plan mode" is removed
 - **code**: the code-only diff, with workflow artefacts excluded
 
-The judges get the request, the ground truth (`acceptance.md`) and the base repository. Each judge
-model sees every pair twice, with A/B positions swapped. A dimension counts as a win only when both
-orders agree; otherwise it's a tie. The report shows position consistency per judge and agreement
-between judges. Judges are told not to reward length or structure. The rubrics are in `rubric/`.
+The judges get the request, the ground truth (`acceptance.md`) and the base repository — including a
+plain list of the file paths present at base, so a judge does not penalise a plan for citing a real
+file it believes was invented. Each judge model sees every pair twice, with A/B positions swapped. A
+dimension counts as a win only when both orders agree; otherwise it's a tie. The report shows
+position consistency per judge and agreement between judges. Judges are told not to reward length or
+structure. The rubrics are in `rubric/`.
+
+A verdict is **valid** only if the top-level `overall` and every dimension is exactly `A`/`B`/`tie`
+and every dimension the rubric's `DIMENSIONS:` line names is present. An invalid verdict is retried
+up to `judge.retries` times, then recorded with `status: "invalid"`; the console prints
+`ok`/`retry`/`invalid` and never reports a malformed verdict as `ok`. Invalid verdicts are excluded
+from win rates and counted under Run health as `invalid judge verdicts: N`.
+
+**Judge coverage.** A judge that produced far fewer verdicts than the best-covered one was run in a
+different invocation (a label judged twice with different rosters). Judges below
+`judge.coverageFloor` (default 0.9) lose their per-judge row and are dropped from the inter-judge
+agreement figure; Run health names them and their coverage. `bench.sh` refuses a second judging
+invocation on a label whose `judgments/` already holds a *different* roster, unless `--force`.
 
 Swapping positions does not control for **length**, and LLM judges tend to favour longer documents.
 The report therefore has a *Verbosity check* table: each task's planning-document length ratio next
-to its planning verdict. Read the planning win rate together with it.
+to its planning verdict. Read the planning win rate together with it. For a stronger control, run
+`./bench.sh --length-matched`: each planning document is summarised to a fixed character target
+(`judge.lengthMatchChars`, default 8000) with one call per document (cached by document hash) before
+judging, and the report prints the raw and length-matched win rates side by side.
 
 A verdict is reused only if it was made on exactly the same documents (hashed); recompiling a run
 so that a document changes makes `bench.sh` judge that pair again. For a readyset run that never

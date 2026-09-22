@@ -144,17 +144,27 @@ const objective = METRICS.map(([key, name, fmt]) => {
 });
 
 // ---------------------------------------------------------------- judgments ------------------
-const judgments = [];
+const judges = [];
 const jdir = join(base, "judgments");
 if (existsSync(jdir)) {
-	for (const t of readdirSync(jdir).filter((d) => statSync(join(jdir, d)).isDirectory())) for (const f of readdirSync(join(jdir, t)).filter((f) => f.endsWith(".json"))) judgments.push(readJson(join(jdir, t, f)));
+	for (const t of readdirSync(jdir).filter((d) => statSync(join(jdir, d)).isDirectory())) for (const f of readdirSync(join(jdir, t)).filter((f) => f.endsWith(".json"))) judges.push(readJson(join(jdir, t, f)));
 }
-const judgeErrors = judgments.filter((j) => j.error).length;
+const judgeErrors = judges.filter((j) => j.error).length;
+const VERDICT_SET = new Set(["readyset", "plan", "tie"]);
+/** A judgment usable for win rates: no error, a status that is not "invalid", and a complete byArm. */
+const validVerdict = (j) => !j.error && j.status !== "invalid" && j.byArm && "overall" in j.byArm && Object.values(j.byArm).every((v) => VERDICT_SET.has(v));
+const judgments = judges.filter(validVerdict);
+const invalidJudgments = judges.filter((j) => !validVerdict(j));
+const judgeInvalid = invalidJudgments.length;
+
+/** Coverage: a judge with far fewer verdicts than the best-covered one was run in a different
+ * invocation (v0.12: the kimi/eai2 roster judged only T01); exclude it from agreement stats. */
+const coverageFloor = manifest?.config?.judge?.coverageFloor ?? 0.9;
 
 /** Combine the AB and BA orders of one (pair, kind, judge): agreeing wins count, otherwise tie. */
-function combined(kind) {
+function combined(kind, items0 = judgments) {
 	const groups = new Map();
-	for (const j of judgments.filter((j) => j.kind === kind && !j.error && j.byArm)) {
+	for (const j of items0.filter((j) => j.kind === kind && validVerdict(j))) {
 		const k = `${j.taskDir}|${j.modelSlug}|${j.rep}|${j.judge}`;
 		if (!groups.has(k)) groups.set(k, []);
 		groups.get(k).push(j);
@@ -179,6 +189,17 @@ function combined(kind) {
 	return out;
 }
 
+/** Verdicts per judge across every kind, and the roster of judges below the coverage floor. */
+const judgeVerdictCounts = (() => {
+	const counts = {};
+	for (const j of judgments) counts[j.judge] = (counts[j.judge] ?? 0) + 1;
+	return counts;
+})();
+const bestCovered = Math.max(0, ...Object.values(judgeVerdictCounts));
+const lowCoverageJudges = Object.entries(judgeVerdictCounts)
+	.filter(([, n]) => bestCovered && n / bestCovered < coverageFloor)
+	.map(([j, n]) => ({ judge: j, verdicts: n, coverage: n / bestCovered }));
+
 function winRate(items, dim) {
 	const w = items.filter((i) => i.dims[dim] === "readyset").length;
 	const l = items.filter((i) => i.dims[dim] === "plan").length;
@@ -189,10 +210,12 @@ function winRate(items, dim) {
 	return { w, t, l, n, rate, ci: bootstrapCI(clusters, (xs) => mean(xs)) };
 }
 
-const judged = {};
-for (const kind of ["plan", "code"]) {
-	const items = combined(kind);
-	if (!items.length) continue;
+function buildJudged(kind) {
+	// Drop low-coverage judges BEFORE combining, so both the per-judge rows and the inter-judge
+	// agreement use only the roster that judged the whole label.
+	const pool = judgments.filter((j) => !lowCoverageJudges.some((l) => l.judge === j.judge));
+	const items = combined(kind, pool);
+	if (!items.length) return null;
 	const dims = Object.keys(items[0].dims);
 	const perJudge = {};
 	for (const judge of [...new Set(items.map((i) => i.judge))]) {
@@ -207,12 +230,18 @@ for (const kind of ["plan", "code"]) {
 		byPair.get(k).push(i.dims.overall);
 	}
 	const multi = [...byPair.values()].filter((v) => v.length > 1);
-	judged[kind] = {
+	return {
 		dims: Object.fromEntries(dims.map((d) => [d, winRate(items, d)])),
 		perJudge,
 		interJudgeAgreement: multi.length ? multi.filter((v) => v.every((x) => x === v[0])).length / multi.length : null,
 		items,
 	};
+}
+
+const judged = {};
+for (const kind of ["plan", "code", "plan-lm"]) {
+	const j = buildJudged(kind);
+	if (j) judged[kind] = j;
 }
 
 // ---------------------------------------------------------------- breakdowns -----------------
@@ -336,6 +365,24 @@ if (judged.plan) {
 	md.push("");
 	md.push(`/readyset planning win rate where its document is ≤2× longer: ${pct(short.rate)} (${short.tasks} tasks) · >2× longer: ${pct(long.rate)} (${long.tasks} tasks).`);
 	md.push("");
+	// Length-matched control (./bench.sh --length-matched): both planning documents are summarised
+	// to a fixed character target before judging, so the raw and controlled rates can be compared.
+	if (judged["plan-lm"]) {
+		const raw = judged.plan.dims.overall;
+		const ctrl = judged["plan-lm"].dims.overall;
+		md.push("## Length-matched planning judge (control for verbosity)");
+		md.push("");
+		md.push("Both planning documents were summarised to a fixed character target before judging. If the raw and controlled rates agree, the raw planning win rate is not a length artefact.");
+		md.push("");
+		md.push("| condition | /readyset win rate | 95% CI | W / T / L |");
+		md.push("| --- | ---: | --- | --- |");
+		md.push(`| raw (full documents) | ${pct(raw.rate)} | ${ci(raw.ci, pct)} | ${raw.w} / ${raw.t} / ${raw.l} |`);
+		md.push(`| length-matched | ${pct(ctrl.rate)} | ${ci(ctrl.ci, pct)} | ${ctrl.w} / ${ctrl.t} / ${ctrl.l} |`);
+		md.push("");
+	} else {
+		md.push("_Length-matched control not run (`./bench.sh --length-matched`). The raw planning win rate above is not controlled for document length; the >2× bucket rows have small n and are indicative only._");
+		md.push("");
+	}
 }
 for (const [field, title] of [["clarity", "By request clarity"], ["category", "By task category"]]) {
 	md.push(`## ${title}`);
@@ -362,6 +409,10 @@ md.push("");
 for (const a of ARMS) md.push(`- ${a}: ${Object.entries(statusCounts[a]).map(([k, v]) => `${k} ${v}`).join(", ") || "—"}`);
 md.push(`- runs where omp routed to a model other than the intended one (fallback): ${drift.length}${drift.length ? ` — ${drift.map((r) => `${r.task}/${r.arm}/r${r.rep}: ${r.modelDrift.join(",")}`).join("; ")}` : ""}`);
 md.push(`- judge calls that failed: ${judgeErrors}`);
+md.push(`- invalid judge verdicts: ${judgeInvalid}${judgeInvalid ? ` — ${invalidJudgments.slice(0, 6).map((j) => `${j.task}/${j.kind}/${j.judge}/${j.order}`).join(", ")}${judgeInvalid > 6 ? ", …" : ""} (excluded from win rates; re-judge with ./bench.sh --force)` : ""}`);
+md.push(
+	`- judges with <${Math.round(coverageFloor * 100)}% coverage (excluded from agreement stats): ${lowCoverageJudges.length ? lowCoverageJudges.map((l) => `${l.judge} (${l.verdicts} verdicts, ${Math.round(l.coverage * 100)}%)`).join(", ") : "none"}`,
+);
 md.push(`- runs with code changed before approval: ${allRuns.filter((r) => r.codeChangedBeforeApproval?.length).map((r) => `${r.task}/${r.arm}/r${r.rep}`).join(", ") || "none"}`);
 md.push(`- review gate bypassed (readyset): ${bypassed.map((r) => `${r.task}/r${r.rep}${r.archivedByAgent ? " (self-archived)" : ""} → ${r.gateBypass.join(", ")}`).join("; ") || "none"}`);
 md.push(`- harness errors (excluded from the comparison, 0 in intent-to-treat): ${harnessErrors.map((r) => `${r.task}/${r.arm}/r${r.rep ?? "?"}: ${r.harnessError}`).join("; ") || "none"}`);

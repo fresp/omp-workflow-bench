@@ -119,6 +119,27 @@ export async function completeJson(opts, { retries = 2 } = {}) {
 	throw lastErr;
 }
 
+/**
+ * A judge verdict is valid when the top-level `overall` and every dimension in `json.dimensions`
+ * is exactly "A"/"B"/"tie", and every dimension the rubric names (its `DIMENSIONS:` line) is
+ * present. Observed failure: cliproxy/glm-5.2 returned `dimensions` for 4 of 144 verdicts WITHOUT
+ * the `overall` key, so byArm.overall was undefined and those records counted as neither a win nor
+ * a loss. `rubric` is the judge prompt text; its `DIMENSIONS:` line is the schema.
+ */
+export function isValidVerdict(json, rubric = "") {
+	if (!json || typeof json !== "object") return { ok: false, reason: "not an object" };
+	const allowed = new Set(["A", "B", "tie"]);
+	if (!allowed.has(json.overall)) return { ok: false, reason: `bad top-level overall: ${JSON.stringify(json.overall)}` };
+	const dims = json.dimensions;
+	if (!dims || typeof dims !== "object" || Array.isArray(dims)) return { ok: false, reason: "no dimensions object" };
+	for (const [k, v] of Object.entries(dims)) if (!allowed.has(v)) return { ok: false, reason: `bad value for ${k}: ${JSON.stringify(v)}` };
+	if (!("overall" in dims)) return { ok: false, reason: "dimensions.overall missing" };
+	const named = (/DIMENSIONS:\s*(.+)/.exec(rubric)?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+	const missing = named.filter((d) => !(d in dims));
+	if (missing.length) return { ok: false, reason: `missing dimension(s): ${missing.join(", ")}` };
+	return { ok: true, reason: "" };
+}
+
 /** Canned replies for the offline smoke test only (BENCH_FAKE_LLM=1). */
 function fakeReply(prompt) {
 	if (prompt.includes('"needs_reply"')) {
