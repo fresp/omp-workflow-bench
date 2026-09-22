@@ -104,37 +104,46 @@ const autosaveWatch = setInterval(() => {
 }, 1000);
 
 async function main() {
-	await Promise.race([rpc.ready, new Promise((_, rej) => setTimeout(() => rej(new Error("omp did not become ready in 120s")), 120_000))]);
-	event("ready");
-	rpc.prompt(task.request);
-	event("prompt-sent");
+	// An omp that never becomes ready (missing mount, missing binary, spawn failure) never prompts,
+	// never nudges — it falls through to the final block with harnessError set (status harness-error).
+	try {
+		await Promise.race([rpc.ready, new Promise((_, rej) => setTimeout(() => rej(new Error(`omp did not become ready in ${cfg.limits.readySeconds}s`)), cfg.limits.readySeconds * 1000))]);
+	} catch (e) {
+		metrics.harnessError = String(e.message ?? e);
+		metrics.errors.push(metrics.harnessError);
+	}
+	if (!metrics.harnessError) {
+		event("ready");
+		rpc.prompt(task.request);
+		event("prompt-sent");
 
-	for (;;) {
-		const idle = await rpc.waitIdle({ quietMs: cfg.limits.idleSeconds * 1000, deadline, isBusy: () => busy > 0 });
-		if (!prepared && listMd(autosaveDir).length > 0) await markPrepared("autosave");
-		if (idle !== "idle") {
-			metrics.status = idle === "timeout" ? "timeout" : "omp-exited";
-			return;
+		for (;;) {
+			const idle = await rpc.waitIdle({ quietMs: cfg.limits.idleSeconds * 1000, deadline, isBusy: () => busy > 0 });
+			if (!prepared && listMd(autosaveDir).length > 0) await markPrepared("autosave");
+			if (idle !== "idle") {
+				metrics.status = idle === "timeout" ? "timeout" : "omp-exited";
+				return;
+			}
+			const text = (await rpc.lastAssistantText()) ?? "";
+			const canAnswer = simUser.answers < cfg.limits.maxSimUserAnswers;
+			const verdict = text && canAnswer ? await simUser.onAgentMessage(text) : { needsReply: false };
+			if (verdict.needsReply) {
+				event("sim-user-reply");
+				rpc.prompt(verdict.reply);
+				continue;
+			}
+			if (prepared) {
+				metrics.status = "done";
+				return;
+			}
+			if (metrics.nudges >= cfg.limits.maxNudges) {
+				metrics.status = "no-plan";
+				return;
+			}
+			metrics.nudges++;
+			event("nudge");
+			rpc.prompt("Please continue.");
 		}
-		const text = (await rpc.lastAssistantText()) ?? "";
-		const canAnswer = simUser.answers < cfg.limits.maxSimUserAnswers;
-		const verdict = text && canAnswer ? await simUser.onAgentMessage(text) : { needsReply: false };
-		if (verdict.needsReply) {
-			event("sim-user-reply");
-			rpc.prompt(verdict.reply);
-			continue;
-		}
-		if (prepared) {
-			metrics.status = "done";
-			return;
-		}
-		if (metrics.nudges >= cfg.limits.maxNudges) {
-			metrics.status = "no-plan";
-			return;
-		}
-		metrics.nudges++;
-		event("nudge");
-		rpc.prompt("Please continue.");
 	}
 }
 

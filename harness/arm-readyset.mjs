@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, cellExtensionRoot, cellMount, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, toSandboxPath, tokenSummary, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
+import { answerAgentUi, cellExtensionRoot, cellMount, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, toSandboxPath, tokenSummary, userEditCodePaths, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
 const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" }, arm: { type: "string", default: "readyset-fast" }, "dirty-workspace": { type: "boolean", default: false } } });
@@ -192,10 +192,18 @@ function readBrainstormLane(dir) {
 const pipelineCommand = () => `/readyset${lane === "auto" ? "" : ` --lane ${lane}`} --model ${models.planModel}`;
 
 async function main() {
-	await Promise.race([rpc.ready, new Promise((_, rej) => setTimeout(() => rej(new Error("omp did not become ready in 120s")), 120_000))]);
-	event("ready");
-	rpc.prompt(`/readyset --model ${models.planModel} --idea ${quote(task.request)}`);
-	event("grill-started");
+	// An omp that never becomes ready (missing mount, missing binary, spawn failure) never prompts,
+	// never nudges — it falls through to the final block with harnessError set (status harness-error).
+	try {
+		await Promise.race([rpc.ready, new Promise((_, rej) => setTimeout(() => rej(new Error(`omp did not become ready in ${cfg.limits.readySeconds}s`)), cfg.limits.readySeconds * 1000))]);
+	} catch (e) {
+		metrics.harnessError = String(e.message ?? e);
+		metrics.errors.push(metrics.harnessError);
+	}
+	if (!metrics.harnessError) {
+		event("ready");
+		rpc.prompt(`/readyset --model ${models.planModel} --idea ${quote(task.request)}`);
+		event("grill-started");
 
 	for (;;) {
 		const idle = await rpc.waitIdle({ quietMs: cfg.limits.idleSeconds * 1000, deadline, isBusy: () => busy > 0 });
@@ -258,6 +266,7 @@ async function main() {
 			event("resume", { phase: "pipeline" });
 			rpc.prompt(pipelineCommand());
 		}
+	} // for (;;) — the whole loop body runs only when omp became ready
 	}
 }
 
@@ -287,15 +296,17 @@ const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
 metrics.userEditsDetail = userEditVerdict?.detail ?? null;
 metrics.userEditsPreserved = userEditVerdict?.preserved ?? null;
-
 // Gate bypass: product code changed although the review gate was never reached. readyset's promise
 // is "nothing executes without approval", so this is a violation regardless of whether the code is
 // good. Seen in deepseek-r1 T12: the Propose turn edited src/, wrote REVIEW.md and archived the change.
-const codeChanged = codePathsFromNumstat(diff.stat);
+// `gateBypassRaw` is the unfiltered numstat answer; `gateBypass` subtracts the harness's own
+// --dirty-workspace edits (which are uncommitted by construction, so always in the diff).
+const codeChanged = userEditCodePaths(paths.ws, userEdits, codePathsFromNumstat(diff.stat));
 const archived = existsSync(join(paths.ws, "readyset", "changes", "archive")) &&
 	readdirSync(join(paths.ws, "readyset", "changes", "archive")).filter((d) => !d.startsWith(".")).length > 0;
 metrics.archivedByAgent = !metrics.prepAt && archived;
-if (!metrics.prepAt && codeChanged.length > 0) {
+metrics.gateBypassRaw = codePathsFromNumstat(diff.stat);
+if (!metrics.harnessError && !metrics.prepAt && codeChanged.length > 0) {
 	metrics.gateBypass = codeChanged;
 	metrics.status = "gate-bypassed";
 }

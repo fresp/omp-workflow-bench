@@ -471,3 +471,27 @@ export function codePathsFromNumstat(stat) {
 		.map((l) => l.split("\t")[2])
 		.filter((p) => p && !isWorkflowPath(p));
 }
+
+/**
+ * Product-code paths that changed beyond the files the harness itself wrote for --dirty-workspace.
+ * The dirtied files are uncommitted by construction, so they always appear in the run's diff; without
+ * subtracting them every --dirty-workspace run of the readyset arm is reported as gate-bypassed even
+ * when the agent never touched the repo (qc-1: gateBypass = [".user-notes.md", "README.md",
+ * "src/services/pricing.mjs"], the three files dirtyWorkspace() had just written).
+ * An entry is subtracted when its path matches the recorded edit AND its recorded sha256 (or, for the
+ * expected-touch file the agent may legitimately edit, its recorded hunk) is unchanged in `ws`.
+ * @param {string} ws workspace root
+ * @param {Array<{path:string, sha256:string, kind:string, hunk:string}>} userEdits dirtyWorkspace() output
+ * @param {string[]} codePaths product-code paths from the run's numstat
+ */
+export function userEditCodePaths(ws, userEdits, codePaths) {
+	if (!userEdits?.length) return codePaths;
+	const unchanged = (e) => {
+		const p = join(ws, e.path);
+		if (!existsSync(p)) return false;
+		if (e.kind === "expected-touch") return readFileSync(p, "utf8").includes(e.hunk);
+		return createHash("sha256").update(readFileSync(p)).digest("hex") === e.sha256;
+	};
+	const own = new Set(userEdits.filter(unchanged).map((e) => e.path));
+	return codePaths.filter((p) => !own.has(p));
+}

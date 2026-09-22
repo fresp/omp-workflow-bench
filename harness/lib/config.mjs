@@ -10,6 +10,7 @@ export function loadConfig() {
 	cfg.limits ??= {};
 	cfg.limits.runMinutes ??= 45;
 	cfg.limits.idleSeconds ??= 25;
+	cfg.limits.readySeconds ??= 120;
 	cfg.limits.maxSimUserAnswers ??= 14;
 	cfg.limits.maxNudges ??= 3;
 	cfg.omp ??= {};
@@ -18,8 +19,10 @@ export function loadConfig() {
 	// Overrides used by the offline smoke test (harness/test/smoke.sh).
 	if (process.env.BENCH_OMP_BIN) cfg.omp.bin = process.env.BENCH_OMP_BIN;
 	if (process.env.BENCH_READYSET_EXT) cfg.omp.readysetExtension = process.env.BENCH_READYSET_EXT;
-	if (process.env.BENCH_WORK_DIR) cfg.workDir = process.env.BENCH_WORK_DIR;
 	if (process.env.BENCH_IDLE_SECONDS) cfg.limits.idleSeconds = Number(process.env.BENCH_IDLE_SECONDS);
+	// Smoke-only: keep the two negative cases (dead omp, dirty workspace) from each waiting the full
+	// ready race. bench.config.json needs no new key; production keeps the 120 s default above.
+	if (process.env.BENCH_READY_SECONDS) cfg.limits.readySeconds = Number(process.env.BENCH_READY_SECONDS);
 	// Test-only override for the offline smoke test, e.g.
 	// BENCH_QUICKCHECK_JSON='{"userEditsPreserved": true}'. The real criterion lives in
 	// bench.config.json → quickCheck.

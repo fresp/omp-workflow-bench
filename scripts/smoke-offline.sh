@@ -56,6 +56,13 @@ chmod +x "$tmp/bin/bwrap"
 export BENCH_BWRAP_LOG="$tmp/bwrap.log"
 export BENCH_BWRAP_BIN="$tmp/bin/bwrap"
 prev_latest="$(cat results/LATEST 2>/dev/null || true)"
+# A dead omp: exits(1) without emitting a `ready` frame, like qc-1's mount-broken omp (which died on
+# "Config overlay not found"). The drivers must report harness-error, never gate-bypassed.
+cat > "$tmp/fake-omp-fail.mjs" <<'JS'
+#!/usr/bin/env node
+process.stderr.write("fake-omp-fail: dying before ready\n");
+process.exit(1);
+JS
 rm -rf results/_smoke
 # T03 runs with --dirty-workspace so compile emits userEditsPreserved; T01/T04 exercise the
 # normal path. The readyset arm gets the fake CONTEXT.md markers via fake-omp.
@@ -65,6 +72,11 @@ node harness/compile.mjs --label _smoke
 node harness/judge.mjs --label _smoke
 node harness/report.mjs --label _smoke
 node harness/quick-check.mjs --label _smoke --baseline _smoke
+# Negative cases for the qc-1 misclassification (status fix). Both use the real arm-readyset.mjs;
+# BENCH_READY_SECONDS keeps them from each waiting the full 120 s ready race. They must not feed
+# compiled.csv — compile/judge/report already ran above on _smoke only.
+BENCH_READY_SECONDS=10 BENCH_OMP_BIN="$tmp/fake-omp-fail.mjs" node harness/run.mjs T01 --reps 1 --label _smoke-fail --models fake/model --arms readyset-fast
+BENCH_READY_SECONDS=10 node harness/run.mjs T03 --reps 1 --label _smoke-dirty --models fake/model --arms readyset-fast --dirty-workspace
 python3 - <<'EOF'
 import json, os
 c = json.load(open('results/_smoke/T03-discount-rounding-bug/readyset-fast__fake_model__r1/compiled.json'))
@@ -87,8 +99,32 @@ for row in ('outside-repo hits at the gate', '/tmp hits at the gate', 'escape tr
 log = open(os.environ['BENCH_BWRAP_LOG']).read()
 assert '/run/cell' in log, log[:2000]
 print('part-6 assertions: userEditsPreserved:true (3/3 kinds), markers parsed, gate outsideRepo/outsideRepoTmp, new report rows, quick-check.md written, cell mount at /run/cell')
+
+# The qc-1 misclassification, replayed offline with the real arm driver (raw metrics.json, because
+# compile.mjs never runs on these labels and its gateBypass() helper would re-derive the old answer).
+def status(label):
+    p = f'results/{label}/T01-product-sorting'
+    if not os.path.isdir(p):
+        p = f'results/{label}/T03-discount-rounding-bug'
+    cell = os.listdir(p)[0]
+    return json.load(open(f'{p}/{cell}/metrics.json'))
+
+m = status('_smoke-fail')
+assert m['status'] == 'harness-error', m['status']
+assert m.get('gateBypass') is None, m.get('gateBypass')
+assert 'did not become ready' in (m.get('harnessError') or ''), m.get('harnessError')
+
+m = status('_smoke-dirty')
+assert m['status'] != 'gate-bypassed', m['status']
+assert m['userEditsPreserved'] is True, m['userEditsPreserved']
+assert m.get('gateBypass') is None, m.get('gateBypass')
+assert m.get('gateBypassRaw'), m.get('gateBypassRaw')   # the dirtied files ARE in the diff…
+assert {e['path'] for e in m['userEdits']} <= set(m['gateBypassRaw']), m['gateBypassRaw']
+print('status assertions: dead omp is harness-error (no gateBypass); dirty run keeps its user edits, gateBypassRaw covers userEdits')
 EOF
 test -s results/_smoke/quick-check.md && echo "quick-check OK → results/_smoke/quick-check.md"
 test -s results/_smoke/report.md && echo "offline smoke OK → results/_smoke/report.md"
 rm -rf "$tmp"
+# Never mistake a negative-case label for a run.
+rm -rf results/_smoke-fail results/_smoke-dirty
 if [[ -n "$prev_latest" ]]; then echo "$prev_latest" > results/LATEST; else rm -f results/LATEST; fi
