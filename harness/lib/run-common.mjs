@@ -318,7 +318,16 @@ export function workspaceEscapes(ws, toolCalls, extPath = null, extMountRoot = n
 		const name = call.tool;
 		const candidates = [];
 		if (name === "bash") {
-			if (typeof call.args?.command === "string") candidates.push(...(call.args.command.match(abs) ?? []).map((m) => m.replace(/[;,)]+$/, "")));
+			if (typeof call.args?.command === "string") {
+				const cmd = call.args.command;
+				for (const m of cmd.matchAll(abs)) {
+					const prev = m.index > 0 ? cmd[m.index - 1] : "";
+					if (prev && /[()\[\]{}*%+-]/.test(prev)) continue;
+					const tok = m[0].replace(/[;,)]+$/, "");
+					if (/^\/\d+(\/|$)/.test(tok)) continue;
+					candidates.push(tok);
+				}
+			}
 		} else if (["read", "edit", "write", "grep", "glob"].includes(name)) {
 			const p = call.args?.path;
 			if (typeof p === "string" && isAbsolute(p)) candidates.push(p);

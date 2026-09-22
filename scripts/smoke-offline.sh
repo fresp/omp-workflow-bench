@@ -9,7 +9,10 @@ tmp="$(mktemp -d)"
 mkdir -p "$tmp/fake-ext/src/extensions" "$tmp/fake-ext/src/lib" "$tmp/fake-ext/src/skill"
 touch "$tmp/fake-ext/src/extensions/ext.ts" "$tmp/fake-ext/src/skill/SKILL.md"
 export BENCH_FAKE_LLM=1 BENCH_OMP_BIN="$PWD/harness/test/fake-omp.mjs" BENCH_READYSET_EXT="$tmp/fake-ext/src/extensions/ext.ts" BENCH_WORK_DIR="$tmp/work" BENCH_IDLE_SECONDS=2
-export BENCH_QUICKCHECK_JSON='{"userEditsPreserved": true}'
+# The 3-task _smoke matrix (T01/T03/T04, self-baseline) cannot satisfy the production
+# task-specific criteria (mustImprove T11 / lanes T09,T04-full / clearTasks T03,T05), so
+# neutralize them here; production criteria live in bench.config.json → quickCheck.
+export BENCH_QUICKCHECK_JSON='{"userEditsPreserved": true, "mustImprove": [], "lanes": {}, "clearTasks": []}'
 # The fake omp must run inside the same bwrap wrapper the real arm drivers build: qc-1's omp died
 # with "Config overlay not found" because the sandbox mounts the cell's output dir at a neutral
 # path, and the smoke passed only because sandboxArgs() skips sandboxing for a .mjs binary.

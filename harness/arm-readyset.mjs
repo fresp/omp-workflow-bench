@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Arm B — /readyset, headless over RPC with only the readyset extension loaded.
 //   1. `/readyset --idea '<request>'` → Grill (questions answered by the simulated user) → brainstorm file
-//   2. `/readyset --fast --model <m>` → pick that brainstorm → Explore → Propose → review gate
+//   2. `/readyset --fast [--lane <lane>] --model <m>` → pick that brainstorm → Explore → Propose → review gate
 //   3. gate: Approve & Execute (same as the /plan arm's auto-approve) → Apply → Code review → "Not yet"
 //
 // Usage: node harness/arm-readyset.mjs --task T01 --model <spec> --rep 1 --label <run-label>
@@ -187,9 +187,11 @@ function readBrainstormLane(dir) {
 	return null;
 }
 
-// --lane fast / --lane full are explicit; --lane auto omits the flag and lets the brainstorm's
-// recorded lane win. The effective lane + its source are recorded in metrics (filled in below).
-const pipelineCommand = () => `/readyset${lane === "auto" ? "" : ` --lane ${lane}`} --model ${models.planModel}`;
+// --fast is always passed so the picker lists fast-lane brainstorms on the fixed and the
+// baseline extension alike. --lane fast / --lane full are explicit; the auto arm omits the
+// flag and lets the brainstorm's recorded lane win. The effective lane + its source are
+// recorded in metrics (filled in below).
+const pipelineCommand = () => `/readyset --fast${lane === "auto" ? "" : ` --lane ${lane}`} --model ${models.planModel}`;
 
 async function main() {
 	// An omp that never becomes ready (missing mount, missing binary, spawn failure) never prompts,
@@ -238,7 +240,7 @@ async function main() {
 		// by this path, and the model go on to fully implement and archive the change with the
 		// review gate never shown (status: gate-bypassed). Restricting this path to "grill" closes
 		// that hole — everything else in pipeline falls through to the nudge/resume path below,
-		// which re-sends the documented recovery (`/readyset --fast ...`, resuming the existing
+		// which re-sends the documented recovery (`/readyset --fast [--lane <lane>] --model <m>`, i.e. pipelineCommand(), resuming the existing
 		// change) instead of trusting arbitrary trailing chat.
 		const text = metrics.phase === "grill" ? (await rpc.lastAssistantText()) ?? "" : "";
 		const canAnswer = simUser.answers < cfg.limits.maxSimUserAnswers;
