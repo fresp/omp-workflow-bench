@@ -151,8 +151,10 @@ const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
 metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
+const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
-metrics.userEditsPreserved = verifyUserEdits(paths.ws, userEdits);
+metrics.userEditsDetail = userEditVerdict?.detail ?? null;
+metrics.userEditsPreserved = userEditVerdict?.preserved ?? null;
 
 if (metrics.harnessError) metrics.status = "harness-error";
 metrics.finishedAt = nowIso();

@@ -134,6 +134,7 @@ for (const run of listRunDirs(label)) {
 		applyDiff: phases.apply?.diff ?? null,
 		mechanisms,
 		userEditsPreserved: checkUserEdits(run, metrics),
+		userEditsDetail: Array.isArray(metrics.userEditsDetail) ? metrics.userEditsDetail : null,
 		model: metrics.model,
 		planModel: metrics.planModel,
 		execModel: metrics.execModel,

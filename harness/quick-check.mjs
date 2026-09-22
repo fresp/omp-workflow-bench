@@ -108,7 +108,9 @@ if (reviewRuns.length) {
 if (qc.userEditsPreserved) {
 	const withCheck = cur.filter((r) => r.c.userEditsPreserved != null);
 	const ok = withCheck.filter((r) => r.c.userEditsPreserved === true).length;
-	check("user edits preserved (100%, hard fail)", withCheck.length > 0 && ok === withCheck.length, `${ok}/${withCheck.length} runs (quick check with --dirty-workspace covers ≥ T03 and T12)`);
+	const failed = withCheck.filter((r) => r.c.userEditsPreserved === false);
+	const failedKinds = [...new Set(failed.flatMap((r) => (r.c.userEditsDetail ?? []).filter((d) => !d.pass).map((d) => d.kind)))];
+	check("user edits preserved (100%, hard fail)", withCheck.length > 0 && ok === withCheck.length, `${ok}/${withCheck.length} runs${failedKinds.length ? ` — failing kinds: ${failedKinds.join(", ")}` : ""} (quick check with --dirty-workspace covers ≥ T03 and T12)`);
 }
 
 // 8. Requested-doc warnings unresolved after contract repair: 0.

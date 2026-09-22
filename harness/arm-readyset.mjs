@@ -271,8 +271,10 @@ const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
 metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
+const userEditVerdict = verifyUserEdits(paths.ws, userEdits);
 metrics.userEdits = userEdits;
-metrics.userEditsPreserved = verifyUserEdits(paths.ws, userEdits);
+metrics.userEditsDetail = userEditVerdict?.detail ?? null;
+metrics.userEditsPreserved = userEditVerdict?.preserved ?? null;
 
 // Gate bypass: product code changed although the review gate was never reached. readyset's promise
 // is "nothing executes without approval", so this is a violation regardless of whether the code is

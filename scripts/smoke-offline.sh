@@ -21,11 +21,15 @@ python3 - <<'EOF'
 import json
 c = json.load(open('results/_smoke/T03-discount-rounding-bug/readyset-fast__fake_model__r1/compiled.json'))
 assert c['userEditsPreserved'] is True, c.get('userEditsPreserved')
+detail = c['userEditsDetail']
+assert isinstance(detail, list) and len(detail) == 3, detail
+assert all(d['pass'] for d in detail), detail
+assert {d['kind'] for d in detail} == {'expected-touch', 'unexpected-touch', 'untracked'}, detail
 assert c['mechanisms']['measurable'] is True
 assert c['review']['triggersFired'] == ['diff-size'], c['review']
 qc = open('results/_smoke/quick-check.md').read()
 assert 'user edits preserved' in qc, qc
-print('part-6 assertions: userEditsPreserved:true, markers parsed, quick-check.md written')
+print('part-6 assertions: userEditsPreserved:true (3/3 kinds), markers parsed, quick-check.md written')
 EOF
 test -s results/_smoke/quick-check.md && echo "quick-check OK → results/_smoke/quick-check.md"
 test -s results/_smoke/report.md && echo "offline smoke OK → results/_smoke/report.md"
