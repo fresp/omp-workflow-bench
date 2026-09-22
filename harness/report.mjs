@@ -429,6 +429,60 @@ if (runs.some((r) => r.outcomeCounts && Object.keys(r.outcomeCounts).length)) {
 	md.push("_No CONTEXT.md phase events (readyset < 0.13 or none written)._");
 }
 md.push("");
+md.push("## Readyset mechanisms");
+md.push("");
+{
+	const rs = runs.filter((r) => r.arm === "readyset" && r.mechanisms);
+	if (rs.some((r) => r.mechanisms.measurable)) {
+		const numMean = (get) => {
+			const v = rs.map(get).filter((x) => typeof x === "number" && Number.isFinite(x));
+			return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+		};
+		const rate = (get) => {
+			const v = rs.map(get).filter((x) => x != null);
+			return v.length ? v.filter(Boolean).length / v.length : null;
+		};
+		md.push("| mechanism | mean / rate | n |", "| --- | ---: | ---: |");
+		const row = (name, val, n) => md.push(`| ${name} | ${val} | ${n} |`);
+		row("open decisions at the gate (F1)", num2(numMean((r) => r.mechanisms.openDecisions)), rs.length);
+		row("assumptions stated (F1)", num2(numMean((r) => r.mechanisms.assumptions)), rs.length);
+		row("(assumed) scenarios (F1)", num2(numMean((r) => r.mechanisms.assumedScenarios)), rs.length);
+		row("blocking findings (F2/F3)", num2(numMean((r) => r.mechanisms.blockingFindings)), rs.length);
+		row("internal-terms advisory hits (F6)", num2(numMean((r) => r.mechanisms.internalTerms)), rs.length);
+		row("requested-doc-missing warnings (F5)", num2(numMean((r) => r.mechanisms.contractWarnings)), rs.length);
+		row("contract repair resolved (F5)", pct(rate((r) => r.mechanisms.contractRepair === "resolved")), rs.length);
+		row("scope-reconcile reverted (F6)", num2(numMean((r) => r.mechanisms.scopeReconcile?.reverted)), rs.length);
+		row("scope-reconcile unjustified (F6)", num2(numMean((r) => r.mechanisms.scopeReconcile?.unjustified)), rs.length);
+		row("out-of-list revert detected/restored", `${num0(numMean((r) => r.mechanisms.scopeReconcile?.outOfListReverted))} / ${num0(numMean((r) => r.mechanisms.scopeReconcile?.outOfListRestored))}`, rs.length);
+		if (runs.some((r) => r.userEditsPreserved != null)) {
+			const withCheck = runs.filter((r) => r.userEditsPreserved != null);
+			row("user edits preserved (F1 dirty-workspace)", `${withCheck.filter((r) => r.userEditsPreserved).length}/${withCheck.length}`, withCheck.length);
+		}
+	} else {
+		md.push("_No mechanism data (readyset < 0.13 or no change dir). Fields render “—” for older runs._");
+	}
+}
+md.push("");
+md.push("## Review triggers");
+md.push("");
+{
+	const withReview = runs.filter((r) => r.review);
+	if (withReview.length) {
+		const skipped = withReview.filter((r) => r.review.skipped).length;
+		const fired = {};
+		const evaluated = {};
+		for (const r of withReview) {
+			for (const t of r.review.triggersFired ?? []) fired[t] = (fired[t] ?? 0) + 1;
+			if (r.review.triggersEvaluated) evaluated["runs with a trigger list"] = (evaluated["runs with a trigger list"] ?? 0) + 1;
+		}
+		md.push("| trigger | fired in |", "| --- | ---: |");
+		for (const [k, v] of Object.entries(fired).sort((a, b) => b[1] - a[1])) md.push(`| ${k} | ${v}/${withReview.length} |`);
+		md.push("", `Review ran in ${withReview.length - skipped}/${withReview.length} runs (skip rate ${pct(skipped / withReview.length)}).`);
+	} else {
+		md.push("_No review events (readyset < 0.13 or none written)._");
+	}
+}
+md.push("");
 for (const [field, title] of [["clarity", "By request clarity"], ["category", "By task category"]]) {
 	md.push(`## ${title}`);
 	md.push("");

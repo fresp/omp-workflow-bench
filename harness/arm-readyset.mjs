@@ -11,10 +11,10 @@ import { parseArgs } from "node:util";
 import { loadConfig, loadTask, listTasks, resolveArmModels } from "./lib/config.mjs";
 import { OmpRpc } from "./lib/rpc.mjs";
 import { createSimUser } from "./lib/sim-user.mjs";
-import { answerAgentUi, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, tokenSummary, workspaceEscapes } from "./lib/run-common.mjs";
+import { answerAgentUi, codePathsFromNumstat, copyIfExists, listMd, nowIso, parseToolCalls, prepareRun, runPaths, safeCaptureDiff, sandboxArgs, subtractTokens, tokenSummary, verifyUserEdits, workspaceEscapes } from "./lib/run-common.mjs";
 import { git } from "./lib/workspace.mjs";
 
-const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" }, arm: { type: "string", default: "readyset-fast" } } });
+const { values: argv } = parseArgs({ options: { task: { type: "string" }, model: { type: "string" }, rep: { type: "string", default: "1" }, label: { type: "string" }, arm: { type: "string", default: "readyset-fast" }, "dirty-workspace": { type: "boolean", default: false } } });
 const cfg = loadConfig();
 const task = loadTask(listTasks([argv.task])[0].dirName);
 const models = resolveArmModels("readyset", argv.model);
@@ -23,7 +23,7 @@ const models = resolveArmModels("readyset", argv.model);
 const arm = argv.arm;
 const lane = arm === "readyset" ? "fast" : arm.replace(/^readyset-/, "");
 const paths = runPaths({ cfg, label: argv.label, task, arm, model: argv.model, rep: argv.rep });
-const { baseSha, overlay } = prepareRun(paths, task);
+const { baseSha, overlay, userEdits } = prepareRun(paths, task, { dirty: argv["dirty-workspace"] });
 
 if (!cfg.omp.readysetExtension || !existsSync(cfg.omp.readysetExtension)) {
 	console.error(`readyset extension not found: ${cfg.omp.readysetExtension} (bench.config.json → omp.readysetExtension)`);
@@ -271,6 +271,8 @@ const diff = safeCaptureDiff(paths.ws, baseSha, metrics);
 writeFileSync(join(paths.out, "final", "changes.diff"), diff.full);
 writeFileSync(join(paths.out, "final", "numstat.txt"), diff.stat);
 metrics.workspaceEscapes = workspaceEscapes(paths.ws, parseToolCalls(join(paths.out, "rpc.ndjson")));
+metrics.userEdits = userEdits;
+metrics.userEditsPreserved = verifyUserEdits(paths.ws, userEdits);
 
 // Gate bypass: product code changed although the review gate was never reached. readyset's promise
 // is "nothing executes without approval", so this is a violation regardless of whether the code is

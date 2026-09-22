@@ -104,3 +104,89 @@ export function outcomeCounts(runDir) {
 	}
 	return counts;
 }
+
+/**
+ * readyset-flow F1–F7 mechanism measurements, parsed from the change dir + CONTEXT.md phase events.
+ * Every field tolerates absence (older runs) and is null rather than 0 when not measurable.
+ */
+export function mechanismMetrics(runDir) {
+	const dirs = changeDirs(runDir);
+	const events = phaseEvents(runDir);
+	const readAll = (name) => {
+		for (const d of dirs) {
+			const f = join(d, name);
+			if (existsSync(f)) {
+				try {
+					return readFileSync(f, "utf8");
+				} catch {}
+			}
+		}
+		return null;
+	};
+
+	// F1: open decisions at the gate, assumptions, assumed scenarios — from the brainstorm and the
+	// proposal. The grill writes `## Open decisions`, proposals mark assumptions.
+	const brainstormText = `${readAll("proposal.md") ?? ""}\n${readAll("design.md") ?? ""}`;
+	const openDecisions = countSection(brainstormText, /open\s+decisions?/i);
+	const assumptions = (brainstormText.match(/\bassumption\b/gi) ?? []).length;
+	const assumedScenarios = (brainstormText.match(/\(assumed\)/gi) ?? []).length;
+
+	// F2/F3: blocking findings and how many were fixed.
+	const reviewText = readAll("REVIEW.md") ?? "";
+	const blocking = countSection(reviewText, /blocking/i);
+	const reviewOutcome = events.findLast?.((e) => String(e.phase).toLowerCase() === "review" && e.edge === "end")?.outcome ?? null;
+	const reviewFix = events.findLast?.((e) => String(e.phase).toLowerCase() === "review-fix" && e.edge === "end")?.outcome ?? null;
+
+	// F5: requested docs missing from the contract, and whether contract repair resolved them.
+	const contractWarnings = events.filter((e) => /requested doc missing from contract/i.test(String(e.outcome ?? e.message ?? ""))).length;
+	const contractRepair = events.findLast?.((e) => String(e.phase).toLowerCase() === "contract-repair" && e.edge === "end")?.outcome ?? null;
+
+	// F6: scope reconciliation counts.
+	const scopeEvents = events.filter((e) => String(e.phase).toLowerCase() === "scope-reconcile");
+	const scopeReconcile = {
+		reverted: scopeEvents.filter((e) => e.outcome === "reverted").length,
+		justified: scopeEvents.filter((e) => e.outcome === "justified").length,
+		unjustified: scopeEvents.filter((e) => e.outcome === "unjustified").length,
+		outOfListReverted: events.filter((e) => /out-of-list revert detected/i.test(String(e.message ?? ""))).length,
+		outOfListRestored: events.filter((e) => /out-of-list revert restored/i.test(String(e.message ?? ""))).length,
+	};
+
+	// Internal-terms advisory hits from the change text (validateChange's own vocabulary).
+	const internalTerms = ["readyset", "grill", "brainstorm", "lane", "contract", "apply", "review gate"].reduce((n, t) => n + (readAll("tasks.md") ?? "").toLowerCase().split(t).length - 1, 0);
+
+	const hasAnything = dirs.length > 0 || events.length > 0;
+	return {
+		measurable: hasAnything,
+		openDecisions,
+		assumptions,
+		assumedScenarios,
+		blockingFindings: blocking,
+		reviewOutcome,
+		reviewFix,
+		contractWarnings,
+		contractRepair,
+		scopeReconcile,
+		internalTerms,
+	};
+}
+
+/** Count the non-empty lines of a `## <heading>` section, or 0 if the heading is absent. */
+function countSection(text, headingRe) {
+	if (!text) return 0;
+	const lines = text.split("\n");
+	let i = 0;
+	for (; i < lines.length; i++) {
+		const m = /^#{1,6}\s+(.*)$/.exec(lines[i]);
+		if (m && headingRe.test(m[1])) break;
+	}
+	if (i >= lines.length) return 0;
+	let n = 0;
+	for (let j = i + 1; j < lines.length; j++) {
+		if (/^#{1,6}\s+/.test(lines[j])) break;
+		const t = lines[j].trim();
+		if (!t || /^[-*]\s*none\b/i.test(t)) continue;
+		if (/^[-*]\s/.test(t) || /^\d+\./.test(t)) n++;
+	}
+	return n;
+}
+

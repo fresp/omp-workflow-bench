@@ -87,11 +87,6 @@ const dangling = cur.reduce((n, r) => n + (r.c.grounding?.dangling?.length ?? 0)
 check("0 dangling plan refs", dangling <= (qc.maxDangling ?? 0), `${dangling} dangling`);
 const protectedChanges = cur.filter((r) => (r.c.unexpectedFiles ?? []).some((f) => /(^|\/)(fixtures|hidden-tests|reference)\//.test(f)));
 check("0 protected-path changes", protectedChanges.length === 0, protectedChanges.map((r) => `${r.taskDir}/${r.arm}`).join(", ") || "none");
-if (qc.userEditsPreserved) {
-	const withCheck = cur.filter((r) => r.c.userEditsPreserved != null);
-	const ok = withCheck.filter((r) => r.c.userEditsPreserved === true).length;
-	check("user edits preserved (100%)", withCheck.length > 0 && ok === withCheck.length, `${ok}/${withCheck.length} runs`);
-}
 
 // 5. T03 code judge not a majority loss.
 const t03Code = cur.filter((r) => r.taskDir.startsWith("T03") && r.c.arm === "readyset");
@@ -109,6 +104,31 @@ if (reviewRuns.length) {
 	check("review skip rate (informational)", true, `${skipped}/${reviewRuns.length} skipped`);
 }
 
+// 7. F1 dirty-workspace: user edits preserved is a hard fail.
+if (qc.userEditsPreserved) {
+	const withCheck = cur.filter((r) => r.c.userEditsPreserved != null);
+	const ok = withCheck.filter((r) => r.c.userEditsPreserved === true).length;
+	check("user edits preserved (100%, hard fail)", withCheck.length > 0 && ok === withCheck.length, `${ok}/${withCheck.length} runs (quick check with --dirty-workspace covers ≥ T03 and T12)`);
+}
+
+// 8. Requested-doc warnings unresolved after contract repair: 0.
+const unresolved = cur.filter((r) => (r.c.mechanisms?.contractWarnings ?? 0) > 0 && r.c.mechanisms?.contractRepair !== "resolved");
+check("requested-doc warnings unresolved after repair: 0", unresolved.length === 0, unresolved.map((r) => r.taskDir).join(", ") || "none");
+
+// 9. Internal-terms hits and open decisions reaching Apply: reported, no threshold yet.
+const mech = cur.filter((r) => r.c.mechanisms?.measurable);
+if (mech.length) {
+	check("internal-terms hits (reported, no threshold)", true, `mean ${num2(mean(mech.map((r) => r.c.mechanisms.internalTerms)))}`);
+	check("open decisions reaching Apply (reported)", true, `mean ${num2(mean(mech.map((r) => r.c.mechanisms.openDecisions)))}`);
+}
+
+// 10. T11: the review-fix turn ran, or there were no blocking findings.
+const t11 = cur.filter((r) => r.taskDir.startsWith("T11") && r.c.arm === "readyset");
+if (t11.length) {
+	const okRuns = t11.filter((r) => r.c.mechanisms?.reviewFix || !r.c.mechanisms?.blockingFindings).length;
+	check("T11 review-fix ran or no blocking findings", okRuns === t11.length, `${okRuns}/${t11.length} runs`);
+}
+
 const md = [`# Quick check — ${label} vs ${baseline}`, "", `Runner: \`node harness/quick-check.mjs --label ${label} --baseline ${baseline}\``, ""];
 const hardFail = results.filter((r) => !r.pass && !r.name.includes("informational"));
 md.push(hardFail.length ? `**FAIL** — ${hardFail.length} criterion(s) failed.` : "**PASS** — all criteria met.", "");
@@ -116,7 +136,9 @@ md.push("| criterion | result | detail |", "| --- | --- | --- |");
 for (const r of results) md.push(`| ${r.name} | ${r.pass ? "pass" : "**FAIL**"} | ${r.detail} |`);
 writeFileSync(join(RESULTS, label, "quick-check.md"), `${md.join("\n")}\n`);
 console.log(`quick-check → results/${label}/quick-check.md (${hardFail.length ? "FAIL" : "PASS"})`);
-
+function num2(x) {
+	return x == null ? "—" : x.toFixed(2);
+}
 function loadJudgments(l, task, kind) {
 	const dir = join(RESULTS, l, "judgments");
 	const out = [];

@@ -20,6 +20,16 @@ export function loadConfig() {
 	if (process.env.BENCH_READYSET_EXT) cfg.omp.readysetExtension = process.env.BENCH_READYSET_EXT;
 	if (process.env.BENCH_WORK_DIR) cfg.workDir = process.env.BENCH_WORK_DIR;
 	if (process.env.BENCH_IDLE_SECONDS) cfg.limits.idleSeconds = Number(process.env.BENCH_IDLE_SECONDS);
+	// Test-only override for the offline smoke test, e.g.
+	// BENCH_QUICKCHECK_JSON='{"userEditsPreserved": true}'. The real criterion lives in
+	// bench.config.json → quickCheck.
+	if (process.env.BENCH_QUICKCHECK_JSON) {
+		try {
+			cfg.quickCheck = { ...(cfg.quickCheck ?? {}), ...JSON.parse(process.env.BENCH_QUICKCHECK_JSON) };
+		} catch {
+			throw new Error("BENCH_QUICKCHECK_JSON is not valid JSON");
+		}
+	}
 	return cfg;
 }
 

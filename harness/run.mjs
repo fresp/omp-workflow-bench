@@ -21,6 +21,7 @@ const { values: argv, positionals } = parseArgs({
 		models: { type: "string" },
 		force: { type: "boolean", default: false },
 		"dry-run": { type: "boolean", default: false },
+		"dirty-workspace": { type: "boolean", default: false },
 	},
 });
 const cfg = loadConfig();
@@ -91,7 +92,7 @@ async function worker() {
 		const { cell } = runPaths({ cfg, label, task: c.task, arm: c.arm, model: c.model, rep: c.rep });
 		const log = createWriteStream(join(RESULTS, label, "logs", `${c.task.id}__${cell}.log`));
 		const started = Date.now();
-		const extra = c.arm.startsWith("plan") ? [] : ["--arm", c.arm];
+		const extra = [...(c.arm.startsWith("plan") ? [] : ["--arm", c.arm]), ...(argv["dirty-workspace"] ? ["--dirty-workspace"] : [])];
 		const code = await new Promise((resolve) => {
 			const child = spawn(process.execPath, [script, "--task", c.task.id, "--model", c.model, "--rep", String(c.rep), "--label", label, ...extra], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
 			child.stdout.pipe(log, { end: false });

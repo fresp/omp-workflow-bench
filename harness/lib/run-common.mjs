@@ -1,4 +1,5 @@
 // Shared plumbing for the two arm drivers.
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -12,13 +13,17 @@ export function runPaths({ cfg, label, task, arm, model, rep }) {
 	return { cell, out, ws };
 }
 
-export function prepareRun(paths, task) {
+export function prepareRun(paths, task, { dirty = false } = {}) {
 	rmSync(paths.out, { recursive: true, force: true });
 	mkdirSync(join(paths.out, "prep"), { recursive: true });
 	mkdirSync(join(paths.out, "final"), { recursive: true });
 	mkdirSync(join(paths.out, "session"), { recursive: true });
 	const baseSha = makeWorkspace(task.fixtureDir, paths.ws);
 	assertCleanWorkspace(paths.ws);
+	// F1: pre-dirty the workspace like a user mid-edit, before the base commit is captured by the
+	// driver's diff. (The base commit already exists; the dirty files show up as uncommitted changes,
+	// which is exactly what a real working tree looks like.)
+	const userEdits = dirty ? dirtyWorkspace(paths.ws, task) : null;
 	// Per-run overlay on top of ~/.omp/agent/config.yml — never edits the user's config. Memory and
 	// autolearn are off so no run can learn from a previous one; plan autosave is how the /plan arm's
 	// plan is captured at the moment it is approved.
@@ -38,13 +43,57 @@ export function prepareRun(paths, task) {
 			"",
 		].join("\n"),
 	);
-	return { baseSha, overlay };
+	return { baseSha, overlay, userEdits };
 }
 
 export function copyIfExists(from, to) {
 	if (!existsSync(from)) return false;
 	mkdirSync(join(to, ".."), { recursive: true });
 	cpSync(from, to, { recursive: true });
+	return true;
+}
+
+/**
+ * F1 dirty-workspace test: make the workspace look like a working tree a real user was mid-edit in,
+ * then record the bytes+hashes of every file we touched. The driver re-checks them after the run and
+ * sets metrics.userEditsPreserved. One file the task is expected to touch, one it is not, and one
+ * untracked user file.
+ * @returns {Array<{path:string, sha256:string, kind:string}>}
+ */
+export function dirtyWorkspace(ws, task) {
+	const expected = (task.expectedTouch ?? []).find((p) => existsSync(join(ws, p)));
+	const allFiles = [];
+	const walkWs = (dir, rel = "") => {
+		for (const name of readdirSync(join(dir, rel))) {
+			const r = rel ? `${rel}/${name}` : name;
+			if (statSync(join(dir, r)).isDirectory()) {
+				if (name !== ".git" && name !== "node_modules") walkWs(dir, r);
+			} else allFiles.push(r);
+		}
+	};
+	walkWs(ws);
+	const untouched = allFiles.find((f) => !expected?.startsWith?.(f) && f !== expected && !(task.expectedTouch ?? []).includes(f));
+	const edits = [];
+	const record = (rel, content, kind) => {
+		const p = join(ws, rel);
+		mkdirSync(dirname(p), { recursive: true });
+		writeFileSync(p, content);
+		edits.push({ path: rel, sha256: createHash("sha256").update(content).digest("hex"), kind });
+	};
+	if (expected) record(expected, `${readFileSync(join(ws, expected), "utf8")}\n// user was editing this before the run\n`, "expected-touch");
+	if (untouched) record(untouched, `${readFileSync(join(ws, untouched), "utf8")}\n// user note left mid-edit\n`, "unexpected-touch");
+	record(".user-notes.md", `# my notes\n\nremember: ship it\n`, "untracked");
+	return edits;
+}
+
+/** True when every recorded user edit is byte-identical on disk; null when nothing was recorded. */
+export function verifyUserEdits(ws, edits) {
+	if (!edits?.length) return null;
+	for (const e of edits) {
+		const p = join(ws, e.path);
+		if (!existsSync(p)) return false;
+		if (createHash("sha256").update(readFileSync(p)).digest("hex") !== e.sha256) return false;
+	}
 	return true;
 }
 

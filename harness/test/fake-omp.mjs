@@ -70,7 +70,7 @@ async function onPrompt(message) {
 		readysetStage = "brainstormed";
 		return;
 	}
-	if (message.startsWith("/readyset --fast")) {
+	if (/^\/readyset( --lane (fast|full|auto))? --model/.test(message) || message.startsWith("/readyset --fast")) {
 		(async () => {
 			streaming = true;
 			const pick = await ui("select", "Pick a brainstorm to take through Readyset (fused review)", ["✎ Type a new idea (grill it here)", "2026-01-01 · Rate limiting"]);
@@ -86,6 +86,24 @@ async function onPrompt(message) {
 				writeFileSync(join(d, "design.md"), "# Design\nMiddleware in `src/app.mjs`, see readyset/changes/rate-limiting.\n");
 				writeFileSync(join(d, "tasks.md"), "- [ ] 1. Add middleware\n  _Verified:_ \n");
 				writeFileSync(join(d, "specs", "api", "spec.md"), "## ADDED Requirements\n### Requirement: limit\n");
+				// CONTEXT.md with the readyset ≥ 0.13 phase markers, so compile.mjs emits the lane,
+				// phase, outcome, review and mechanism fields without any real model calls.
+				const at = (s) => new Date(Date.now() + s * 1000).toISOString();
+				const marker = (ev) => `<!-- readyset-phase -->\n\`\`\`json\n${JSON.stringify(ev)}\n\`\`\`\n`;
+				writeFileSync(
+					join(d, "CONTEXT.md"),
+					[
+						"# Change: rate-limiting",
+						marker({ phase: "gate", edge: "start", at: at(0), lane: "full", laneSource: "brainstorm" }),
+						marker({ phase: "gate", edge: "end", at: at(1), outcome: "approved" }),
+						marker({ phase: "apply", edge: "start", at: at(1) }),
+						marker({ phase: "apply", edge: "end", at: at(4), outcome: "done", diff: { files: 1, added: 2, deleted: 0 } }),
+						marker({ phase: "contract-repair", edge: "end", at: at(5), outcome: "resolved" }),
+						marker({ phase: "review", edge: "start", at: at(6), triggersEvaluated: ["diff-size", "risk"], triggersFired: ["diff-size"] }),
+						marker({ phase: "review", edge: "end", at: at(8), outcome: "fixed" }),
+						marker({ phase: "scope-reconcile", edge: "end", at: at(9), outcome: "reverted" }),
+					].join("\n"),
+				);
 			});
 			streaming = true;
 			const gate = await ui("select", 'Review change "rate-limiting" — structurally valid', ["Approve & Execute", "Approve & Compact", "Refine", "Discard"]);

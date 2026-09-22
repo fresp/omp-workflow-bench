@@ -14,7 +14,7 @@ import { listRunDirs, readJson, readText, resolveLabel, RESULTS, walk } from "./
 import { runTestDir } from "./lib/tests.mjs";
 import { git, makeWorkspace } from "./lib/workspace.mjs";
 import { canonicalTokens } from "./lib/tokens.mjs";
-import { outcomeCounts, phaseSummary } from "./lib/context.mjs";
+import { outcomeCounts, phaseSummary, mechanismMetrics } from "./lib/context.mjs";
 
 const { values: argv } = parseArgs({ options: { label: { type: "string" }, force: { type: "boolean", default: false } } });
 const label = resolveLabel(argv.label);
@@ -46,6 +46,7 @@ for (const run of listRunDirs(label)) {
 	const phases = phaseSummary(run.dir);
 	const lane = metrics.effectiveLane ?? phases.lane ?? (run.arm === "readyset" ? run.lane ?? null : null);
 	const laneSource = metrics.laneSource ?? phases.laneSource ?? (lane ? "directory" : null);
+	const mechanisms = run.arm === "readyset" ? mechanismMetrics(run.dir) : null;
 
 	// ---------- diff: code vs workflow artefacts ----------
 	const fullDiff = readText(join(run.dir, "final", "changes.diff"));
@@ -131,6 +132,8 @@ for (const run of listRunDirs(label)) {
 		outcomeCounts: outcomeCounts(run.dir),
 		review: phases.review,
 		applyDiff: phases.apply?.diff ?? null,
+		mechanisms,
+		userEditsPreserved: checkUserEdits(run, metrics),
 		model: metrics.model,
 		planModel: metrics.planModel,
 		execModel: metrics.execModel,
@@ -269,6 +272,11 @@ function filterDiff(diff, keep) {
 			return m ? keep(m[1]) : false;
 		})
 		.join("");
+}
+
+/** F1: whether the driver found every pre-dirtied user file byte-identical after the run. */
+function checkUserEdits(run, metrics) {
+	return typeof metrics.userEditsPreserved === "boolean" ? metrics.userEditsPreserved : null;
 }
 
 function codeChangedBeforeApproval(status, isWorkflow) {
