@@ -7,6 +7,7 @@
   "scripts": {
     "preflight": "node harness/preflight.mjs",
     "validate": "node scripts/validate-tasks.mjs",
+    "test": "node --test harness/test/workspace-escapes.test.mjs harness/test/quick-check-lanes.test.mjs",
     "smoke": "bash scripts/smoke-offline.sh",
     "run": "node harness/run.mjs",
     "compile": "node harness/compile.mjs",

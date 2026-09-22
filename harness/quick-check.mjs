@@ -66,10 +66,18 @@ for (const t of qc.mustImprove ?? []) {
 	check(`${t} improves vs ${baseline}`, now != null && was != null && now > was, `${fmt(was)} → ${fmt(now)}`);
 }
 
-// 2. Lanes: listed tasks must run on the expected lane.
+// 2. Lanes: listed tasks must run on the expected lane. Only the arm that decides the lane is
+//    authoritative: readyset-auto resolves the lane from the brainstorm, while readyset-fast /
+//    readyset-full force it. Prefer the auto runs; fall back to every readyset arm when no auto
+//    run exists (a wave that only ran explicit arms). Comparing every arm at once fails any task
+//    run under both readyset-fast and readyset-full.
 for (const [t, lane] of Object.entries(qc.lanes ?? {})) {
-	const lanes = (curT.get(t)?.readyset ?? []).map((r) => r.c.lane);
-	check(`${t} lane = ${lane}`, lanes.length > 0 && lanes.every((l) => l === lane), `lanes: ${lanes.join(", ") || "none"}`);
+	const rs = curT.get(t)?.readyset ?? [];
+	const auto = rs.filter((r) => r.armRaw === "readyset-auto");
+	const used = auto.length ? auto : rs;
+	const lanes = used.map((r) => r.c.lane);
+	const arms = [...new Set(used.map((r) => r.armRaw))].join(", ") || "none";
+	check(`${t} lane = ${lane}`, lanes.length > 0 && lanes.includes(lane), `lanes: ${lanes.join(", ") || "none"} (arms: ${arms})`);
 }
 
 // 3. Clear-task wall time −X% vs baseline readyset.

@@ -3,6 +3,8 @@
 # No model calls, no tokens. Use it after editing the harness.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# Lock the harness unit tests (the /100 escape fix and the lanes criterion) before the pipeline run.
+npm test
 tmp="$(mktemp -d)"
 # A minimal extension tree at a neutral path: stageExtension copies src/extensions, src/lib and
 # src/skill, so the fake extension must live inside that shape.

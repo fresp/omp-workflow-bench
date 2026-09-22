@@ -99,7 +99,7 @@ the prompt:
 **`/readyset` arm** runs:
 1. `/readyset --model <m> --idea '<request>'`. Grilling runs, and its questions (plain chat in RPC
    mode) are answered by the simulated user. Grilling ends when the brainstorm file is written.
-2. `/readyset --fast --model <m>`, which picks that brainstorm → Explore → Propose → review gate.
+2. `/readyset --fast [--lane <lane>] --model <m>`, which picks that brainstorm → Explore → Propose → review gate.
 3. At the gate, the driver snapshots proposal, design, specs and tasks (the preparation output),
    then chooses **Approve & Execute**.
 4. Apply runs, followed by the verification send-back (the tool's default option), then code review,

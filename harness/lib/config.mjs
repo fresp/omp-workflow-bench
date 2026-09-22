@@ -16,7 +16,7 @@ export function loadConfig() {
 	cfg.omp ??= {};
 	cfg.omp.bin ??= "omp";
 	cfg.omp.extraArgs ??= [];
-	// Overrides used by the offline smoke test (harness/test/smoke.sh).
+	// Overrides used by the offline smoke test (scripts/smoke-offline.sh).
 	if (process.env.BENCH_OMP_BIN) cfg.omp.bin = process.env.BENCH_OMP_BIN;
 	if (process.env.BENCH_READYSET_EXT) cfg.omp.readysetExtension = process.env.BENCH_READYSET_EXT;
 	if (process.env.BENCH_IDLE_SECONDS) cfg.limits.idleSeconds = Number(process.env.BENCH_IDLE_SECONDS);

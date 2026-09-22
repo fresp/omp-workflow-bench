@@ -80,7 +80,7 @@ async function onPrompt(message) {
 		readysetStage = "brainstormed";
 		return;
 	}
-	if (/^\/readyset( --lane (fast|full|auto))? --model/.test(message) || message.startsWith("/readyset --fast")) {
+	if (/^\/readyset( --fast)?( --lane (fast|full|auto))? --model/.test(message)) {
 		(async () => {
 			streaming = true;
 			const pick = await ui("select", "Pick a brainstorm to take through Readyset (fused review)", ["✎ Type a new idea (grill it here)", "2026-01-01 · Rate limiting"]);
