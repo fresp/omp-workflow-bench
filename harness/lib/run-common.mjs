@@ -68,7 +68,6 @@ export function copyIfExists(from, to) {
  * @returns {Array<{path:string, sha256:string, kind:string, hunk:string}>}
  */
 export function dirtyWorkspace(ws, task) {
-	const expected = (task.expectedTouch ?? []).find((p) => existsSync(join(ws, p)));
 	const allFiles = [];
 	const walkWs = (dir, rel = "") => {
 		for (const name of readdirSync(join(dir, rel))) {
@@ -79,7 +78,9 @@ export function dirtyWorkspace(ws, task) {
 		}
 	};
 	walkWs(ws);
-	const untouched = allFiles.find((f) => !expected?.startsWith?.(f) && f !== expected && !(task.expectedTouch ?? []).includes(f));
+	const matchesExpected = (f) => (task.expectedTouch ?? []).some((p) => f === p || f.startsWith(p.endsWith("/") ? p : `${p}/`));
+	const expected = allFiles.find(matchesExpected);
+	const untouched = allFiles.find((f) => f !== expected && !matchesExpected(f));
 	const edits = [];
 	const record = (rel, content, kind, hunk) => {
 		const p = join(ws, rel);
